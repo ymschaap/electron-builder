@@ -4,7 +4,7 @@
     "definitions": {
         "AppXOptions": {
             "additionalProperties": false,
-            "description": "AppX Options ([appx](#Config-appx}).",
+            "description": "AppX Options ([appx](#Config-appx)).",
             "properties": {
                 "backgroundColor": {
                     "description": "The background color of the app tile.",
@@ -55,6 +55,7 @@
                     ]
                 }
             },
+            "title": "AppXOptions",
             "type": "object"
         },
         "AsarOptions": {
@@ -70,6 +71,7 @@
                     "type": "boolean"
                 }
             },
+            "title": "AsarOptions",
             "type": "object"
         },
         "BintrayOptions": {
@@ -116,6 +118,7 @@
                     ]
                 }
             },
+            "title": "BintrayOptions",
             "type": "object"
         },
         "DebOptions": {
@@ -290,6 +293,7 @@
                     ]
                 }
             },
+            "title": "DebOptions",
             "type": "object"
         },
         "DmgContent": {
@@ -316,11 +320,12 @@
                     "type": "number"
                 }
             },
+            "title": "DmgContent",
             "type": "object"
         },
         "DmgOptions": {
             "additionalProperties": false,
-            "description": "`dmg` macOS DMG Options",
+            "description": "macOS DMG Options ([dmg](#Config-dmg)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -443,6 +448,7 @@
                     "description": "The DMG windows position and size. See [dmg.window](#DmgWindow)."
                 }
             },
+            "title": "DmgOptions",
             "type": "object"
         },
         "DmgWindow": {
@@ -468,6 +474,7 @@
                     "type": "number"
                 }
             },
+            "title": "DmgWindow",
             "type": "object"
         },
         "FileAssociation": {
@@ -519,6 +526,7 @@
                     "type": "string"
                 }
             },
+            "title": "FileAssociation",
             "type": "object"
         },
         "FilePattern": {
@@ -544,6 +552,7 @@
                     "type": "string"
                 }
             },
+            "title": "FilePattern",
             "type": "object"
         },
         "GenericServerOptions": {
@@ -580,6 +589,7 @@
                     "type": "string"
                 }
             },
+            "title": "GenericServerOptions",
             "type": "object"
         },
         "GithubOptions": {
@@ -648,6 +658,7 @@
                     "type": "boolean"
                 }
             },
+            "title": "GithubOptions",
             "type": "object"
         },
         "LinuxBuildOptions": {
@@ -953,6 +964,7 @@
                     ]
                 }
             },
+            "title": "LinuxBuildOptions",
             "type": "object"
         },
         "LinuxTargetSpecificOptions": {
@@ -1102,11 +1114,12 @@
                     ]
                 }
             },
+            "title": "LinuxTargetSpecificOptions",
             "type": "object"
         },
         "MacOptions": {
             "additionalProperties": false,
-            "description": "macOS Options",
+            "description": "macOS Options ([mac](#Config-mac)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -1396,11 +1409,12 @@
                     "description": "Whether to sign app for development or for distribution."
                 }
             },
+            "title": "MacOptions",
             "type": "object"
         },
         "MasBuildOptions": {
             "additionalProperties": false,
-            "description": "MAS (Mac Application Store) Options",
+            "description": "MAS (Mac Application Store) Options ([mas](#Config-mas)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -1690,6 +1704,7 @@
                     "description": "Whether to sign app for development or for distribution."
                 }
             },
+            "title": "MasBuildOptions",
             "type": "object"
         },
         "MetadataDirectories": {
@@ -1720,11 +1735,12 @@
                     ]
                 }
             },
+            "title": "MetadataDirectories",
             "type": "object"
         },
         "NsisOptions": {
             "additionalProperties": false,
-            "description": "NSIS specific options ([nsis](#Config-nsis}).\n\nSee [NSIS target notes](https://github.com/electron-userland/electron-builder/wiki/NSIS).",
+            "description": "NSIS specific options ([nsis](#Config-nsis)).\n\nSee [NSIS target notes](https://github.com/electron-userland/electron-builder/wiki/NSIS).",
             "properties": {
                 "allowElevation": {
                     "default": true,
@@ -1903,11 +1919,12 @@
                     "type": "boolean"
                 }
             },
+            "title": "NsisOptions",
             "type": "object"
         },
         "NsisWebOptions": {
             "additionalProperties": false,
-            "description": "Web Installer Specific Options ([nsisWeb](#Config-nsisWeb}).",
+            "description": "Web Installer Specific Options ([nsisWeb](#Config-nsisWeb)).",
             "properties": {
                 "allowElevation": {
                     "default": true,
@@ -2093,11 +2110,12 @@
                     "type": "boolean"
                 }
             },
+            "title": "NsisWebOptions",
             "type": "object"
         },
         "PkgOptions": {
             "additionalProperties": false,
-            "description": "`pkg` macOS Product Archive Options",
+            "description": "macOS Product Archive Options ([pkg](#Config-pkg)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -2187,11 +2205,12 @@
                     ]
                 }
             },
+            "title": "PkgOptions",
             "type": "object"
         },
         "PortableOptions": {
             "additionalProperties": false,
-            "description": "Portable Specific Options ([portable](#Config-portable})",
+            "description": "Portable Specific Options ([portable](#Config-portable)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -2267,6 +2286,7 @@
                     "type": "boolean"
                 }
             },
+            "title": "PortableOptions",
             "type": "object"
         },
         "Protocol": {
@@ -2296,6 +2316,7 @@
                     "type": "array"
                 }
             },
+            "title": "Protocol",
             "type": "object"
         },
         "PublishProvider": {
@@ -2305,6 +2326,7 @@
                 "github",
                 "s3"
             ],
+            "title": "PublishProvider",
             "type": "string"
         },
         "S3Options": {
@@ -2389,6 +2411,7 @@
                     ]
                 }
             },
+            "title": "S3Options",
             "type": "object"
         },
         "SnapOptions": {
@@ -2783,11 +2806,12 @@
                     ]
                 }
             },
+            "title": "SnapOptions",
             "type": "object"
         },
         "SquirrelWindowsOptions": {
             "additionalProperties": false,
-            "description": "Squirrel.Windows Options ([squirrelWindows](#Config-squirrelWindows}).\n\nTo use Squirrel.Windows please install `electron-builder-squirrel-windows` dependency. Squirrel.Windows target is maintained, but deprecated. Please use `nsis` instead.",
+            "description": "Squirrel.Windows Options ([squirrelWindows](#Config-squirrelWindows)).\n\nTo use Squirrel.Windows please install `electron-builder-squirrel-windows` dependency. Squirrel.Windows target is maintained, but deprecated. Please use `nsis` instead.",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -3092,6 +3116,7 @@
                     "type": "boolean"
                 }
             },
+            "title": "SquirrelWindowsOptions",
             "type": "object"
         },
         "TargetConfig": {
@@ -3121,11 +3146,12 @@
                     "type": "string"
                 }
             },
+            "title": "TargetConfig",
             "type": "object"
         },
         "WinBuildOptions": {
             "additionalProperties": false,
-            "description": "Windows Specific Options ([win](#Config-win}).",
+            "description": "Windows Specific Options ([win](#Config-win)).",
             "properties": {
                 "artifactName": {
                     "description": "The [artifact file name pattern](https://github.com/electron-userland/electron-builder/wiki/Options#artifact-file-name-pattern).",
@@ -3393,6 +3419,7 @@
                     "type": "string"
                 }
             },
+            "title": "WinBuildOptions",
             "type": "object"
         }
     },

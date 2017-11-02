@@ -52,19 +52,30 @@ export class AppImageUpdater extends BaseUpdater {
       }
 
       let isDownloadFull = false
-      try {
-        await new DifferentialDownloader((versionInfo as any) as AppImageUpdateInfo, this.httpExecutor, {
-          newUrl: fileInfo.url,
-          oldPackageFile: oldFile,
-          logger: this._logger,
-          newFile: installerPath,
-          requestHeaders: this.requestHeaders,
-        }).downloadAppImage(safeLoad(await readBlockMapDataFromAppImage(oldFile)))
+
+      // temporary workaround
+      // github doesnt handle differential downloads as implemented
+      // so, just download the full .appimage if the endpoint is github
+      if (fileInfo.url.startsWith('https://github.com')) {
+        this._logger.info(`Using full download to avoid triggering github's rate limiter`)
+        isDownloadFull = true
       }
-      catch (e) {
-        this._logger.error(`Cannot download differentially, fallback to full download: ${e.stack || e}`)
-        // during test (developer machine mac) we must throw error
-        isDownloadFull = process.platform === "linux"
+
+      if (!isDownloadFull) {
+        try {
+          await new DifferentialDownloader((versionInfo as any) as AppImageUpdateInfo, this.httpExecutor, {
+            newUrl: fileInfo.url,
+            oldPackageFile: oldFile,
+            logger: this._logger,
+            newFile: installerPath,
+            requestHeaders: this.requestHeaders,
+          }).downloadAppImage(safeLoad(await readBlockMapDataFromAppImage(oldFile)))
+        }
+        catch (e) {
+          this._logger.error(`Cannot download differentially, fallback to full download: ${e.stack || e}`)
+          // during test (developer machine mac) we must throw error
+          isDownloadFull = process.platform === "linux"
+        }
       }
 
       if (isDownloadFull) {

@@ -2,11 +2,11 @@ import chalk from "chalk"
 
 export function printErrorAndExit(error: Error) {
   console.error(chalk.red((error.stack || error).toString()))
-  process.exit(-1)
+  process.exit(1)
 }
 
 // you don't need to handle error in your task - it is passed only indicate status of promise
-export async function executeFinally<T>(promise: Promise<T>, task: (errorOccurred: boolean) => Promise<any>): Promise<T> {
+export async function executeFinally<T>(promise: Promise<T>, task: (isErrorOccurred: boolean) => Promise<any>): Promise<T> {
   let result: T | null = null
   try {
     result = await promise
@@ -22,12 +22,7 @@ export async function executeFinally<T>(promise: Promise<T>, task: (errorOccurre
     throw originalError
   }
 
-  try {
-    await task(false)
-  }
-  catch (taskError) {
-    throw taskError
-  }
+  await task(false)
   return result
 }
 

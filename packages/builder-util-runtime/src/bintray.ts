@@ -27,7 +27,7 @@ export class BintrayClient {
   readonly distribution: string | null
   readonly packageName: string
 
-  private requestHeaders: RequestHeaders | null
+  private requestHeaders: RequestHeaders | null = null
 
   setRequestHeaders(value: RequestHeaders | null) {
     this.requestHeaders = value
@@ -51,7 +51,7 @@ export class BintrayClient {
     this.basePath = `/packages/${this.owner}/${this.repo}/${this.packageName}`
   }
 
-  private bintrayRequest<T>(path: string, auth: string | null, data: {[name: string]: any; } | null = null, cancellationToken: CancellationToken, method?: "GET" | "DELETE" | "PUT"): Promise<T> {
+  private bintrayRequest<T>(path: string, auth: string | null, data: {[name: string]: any } | null = null, cancellationToken: CancellationToken, method?: "GET" | "DELETE" | "PUT"): Promise<T> {
     return parseJson(this.httpExecutor.request(configureRequestOptions({hostname: "api.bintray.com", path, headers: this.requestHeaders || undefined}, auth, method), cancellationToken, data))
   }
 

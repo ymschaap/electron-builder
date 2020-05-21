@@ -1,12 +1,12 @@
 import { createHash, Hash } from "crypto"
 import _debug from "debug"
-import { EventEmitter } from "events"
-import { createWriteStream } from "fs-extra-p"
+import { createWriteStream } from "fs"
 import { IncomingMessage, OutgoingHttpHeaders, RequestOptions } from "http"
 import { Socket } from "net"
 import { Transform } from "stream"
-import { parse as parseUrl } from "url"
+import { URL } from "url"
 import { CancellationToken } from "./CancellationToken"
+import { newError } from "./index"
 import { ProgressCallbackTransform, ProgressInfo } from "./ProgressCallbackTransform"
 
 const debug = _debug("electron-builder")
@@ -15,31 +15,43 @@ export interface RequestHeaders extends OutgoingHttpHeaders {
   [key: string]: string
 }
 
-export interface Response extends EventEmitter {
-  statusCode?: number
-  statusMessage?: string
-
-  headers: any
-
-  setEncoding(encoding: string): void
-}
-
 export interface DownloadOptions {
   readonly headers?: OutgoingHttpHeaders | null
-  readonly skipDirCreation?: boolean
   readonly sha2?: string | null
   readonly sha512?: string | null
 
   readonly cancellationToken: CancellationToken
 
+  // noinspection JSUnusedLocalSymbols
   onProgress?(progress: ProgressInfo): void
 }
 
-export class HttpError extends Error {
-  constructor(readonly response: {statusMessage?: string | undefined, statusCode?: number | undefined, headers?: { [key: string]: Array<string>; } | undefined}, public description: any | null = null) {
-    super(response.statusCode + " " + response.statusMessage + (description == null ? "" : ("\n" + JSON.stringify(description, null, "  "))) + "\nHeaders: " + JSON.stringify(response.headers, null, "  "))
+export function createHttpError(response: IncomingMessage, description: any | null = null) {
+  return new HttpError(response.statusCode || -1, `${response.statusCode} ${response.statusMessage}` + (description == null ? "" : ("\n" + JSON.stringify(description, null, "  "))) + "\nHeaders: " + safeStringifyJson(response.headers), description)
+}
 
-    this.name = "HttpError"
+const HTTP_STATUS_CODES = new Map<number, string>([
+  [429, "Too many requests"],
+  [400, "Bad request"],
+  [403, "Forbidden"],
+  [404, "Not found"],
+  [405, "Method not allowed"],
+  [406, "Not acceptable"],
+  [408, "Request timeout"],
+  [413, "Request entity too large"],
+  [500, "Internal server error"],
+  [502, "Bad gateway"],
+  [503, "Service unavailable"],
+  [504, "Gateway timeout"],
+  [505, "HTTP version not supported"],
+])
+
+export class HttpError extends Error {
+  constructor(readonly statusCode: number, message: string = `HTTP error: ${HTTP_STATUS_CODES.get(statusCode) || statusCode}`, readonly description: any | null = null) {
+    super(message)
+
+    this.name = "HttpError";
+    (this as NodeJS.ErrnoException).code = `HTTP_ERROR_${statusCode}`
   }
 }
 
@@ -50,7 +62,7 @@ export function parseJson(result: Promise<string | null>) {
 export abstract class HttpExecutor<REQUEST> {
   protected readonly maxRedirects = 10
 
-  request(options: RequestOptions, cancellationToken: CancellationToken = new CancellationToken(), data?: { [name: string]: any; } | null): Promise<string | null> {
+  request(options: RequestOptions, cancellationToken: CancellationToken = new CancellationToken(), data?: { [name: string]: any } | null): Promise<string | null> {
     configureRequestOptions(options)
     const encodedData = data == null ? undefined : Buffer.from(JSON.stringify(data))
     if (encodedData != null) {
@@ -58,7 +70,9 @@ export abstract class HttpExecutor<REQUEST> {
       options.headers!["Content-Type"] = "application/json"
       options.headers!["Content-Length"] = encodedData.length
     }
-    return this.doApiRequest(options, cancellationToken, it => (it as any).end(encodedData))
+    return this.doApiRequest(options, cancellationToken, it => {
+      (it as any).end(encodedData)
+    })
   }
 
   doApiRequest(options: RequestOptions, cancellationToken: CancellationToken, requestProcessor: (request: REQUEST, reject: (error: Error) => void) => void, redirectCount: number = 0): Promise<string> {
@@ -67,7 +81,7 @@ export abstract class HttpExecutor<REQUEST> {
     }
 
     return cancellationToken.createPromise<string>((resolve, reject, onCancel) => {
-      const request = this.doRequest(options, (response: any) => {
+      const request = this.createRequest(options, (response: any) => {
         try {
           this.handleResponse(response, options, cancellationToken, resolve, reject, redirectCount, requestProcessor)
         }
@@ -76,9 +90,20 @@ export abstract class HttpExecutor<REQUEST> {
         }
       })
       this.addErrorAndTimeoutHandlers(request, reject)
+      this.addRedirectHandlers(request, options, reject, redirectCount, options => {
+        this.doApiRequest(options, cancellationToken, requestProcessor, redirectCount)
+          .then(resolve)
+          .catch(reject)
+      })
       requestProcessor(request, reject)
       onCancel(() => request.abort())
     })
+  }
+
+  // noinspection JSUnusedLocalSymbols
+  // eslint-disable-next-line
+  protected addRedirectHandlers(request: any, options: RequestOptions, reject: (error: Error) => void, redirectCount: number, handler: (options: RequestOptions) => void) {
+    // not required for NodeJS
   }
 
   addErrorAndTimeoutHandlers(request: any, reject: (error: Error) => void) {
@@ -89,7 +114,13 @@ export abstract class HttpExecutor<REQUEST> {
     })
   }
 
-  protected handleResponse(response: Response, options: RequestOptions, cancellationToken: CancellationToken, resolve: (data?: any) => void, reject: (error: Error) => void, redirectCount: number, requestProcessor: (request: REQUEST, reject: (error: Error) => void) => void) {
+  private handleResponse(response: IncomingMessage,
+                         options: RequestOptions,
+                         cancellationToken: CancellationToken,
+                         resolve: (data?: any) => void,
+                         reject: (error: Error) => void,
+                         redirectCount: number,
+                         requestProcessor: (request: REQUEST, reject: (error: Error) => void) => void) {
     if (debug.enabled) {
       debug(`Response: ${response.statusCode} ${response.statusMessage}, request options: ${safeStringifyJson(options)}`)
     }
@@ -97,7 +128,7 @@ export abstract class HttpExecutor<REQUEST> {
     // we handle any other >= 400 error on request end (read detailed message in the response body)
     if (response.statusCode === 404) {
       // error is clear, we don't need to read detailed error description
-      reject(new HttpError(response, `method: ${options.method} url: ${options.protocol || "https:"}//${options.hostname}${options.path}
+      reject(createHttpError(response, `method: ${options.method || "GET"} url: ${options.protocol || "https:"}//${options.hostname}${options.port ? `:${options.port}` : ""}${options.path}
 
 Please double check that your authentication token is correct. Due to security reasons actual status maybe not reported, but 404.
 `))
@@ -111,29 +142,28 @@ Please double check that your authentication token is correct. Due to security r
 
     const redirectUrl = safeGetHeader(response, "location")
     if (redirectUrl != null) {
-      if (redirectCount > 10) {
-        reject(new Error("Too many redirects (> 10)"))
+      if (redirectCount > this.maxRedirects) {
+        reject(this.createMaxRedirectError())
         return
       }
 
-      this.doApiRequest(configureRequestOptionsFromUrl(redirectUrl, {...options}), cancellationToken, requestProcessor, redirectCount)
+      this.doApiRequest(HttpExecutor.prepareRedirectUrlOptions(redirectUrl, options), cancellationToken, requestProcessor, redirectCount)
         .then(resolve)
         .catch(reject)
       return
     }
 
-    let data = ""
     response.setEncoding("utf8")
-    response.on("data", (chunk: string) => {
-      data += chunk
-    })
 
+    let data = ""
+    response.on("error", reject)
+    response.on("data", (chunk: string) => data += chunk)
     response.on("end", () => {
       try {
         if (response.statusCode != null && response.statusCode >= 400) {
           const contentType = safeGetHeader(response, "content-type")
           const isJson = contentType != null && (Array.isArray(contentType) ? contentType.find(it => it.includes("json")) != null : contentType.includes("json"))
-          reject(new HttpError(response, isJson ? JSON.parse(data) : data))
+          reject(createHttpError(response, isJson ? JSON.parse(data) : data))
         }
         else {
           resolve(data.length === 0 ? null : data)
@@ -145,64 +175,172 @@ Please double check that your authentication token is correct. Due to security r
     })
   }
 
-  abstract doRequest(options: any, callback: (response: any) => void): any
+  // noinspection JSUnusedLocalSymbols
+  abstract createRequest(options: any, callback: (response: any) => void): any
 
-  protected doDownload(requestOptions: any, destination: string, redirectCount: number, options: DownloadOptions, callback: (error: Error | null) => void, onCancel: (callback: () => void) => void) {
-    const request = this.doRequest(requestOptions, (response: IncomingMessage) => {
+  async downloadToBuffer(url: URL, options: DownloadOptions): Promise<Buffer> {
+    return await options.cancellationToken.createPromise<Buffer>((resolve, reject, onCancel) => {
+      let result: Buffer | null = null
+      const requestOptions = {
+        headers: options.headers || undefined,
+        // because PrivateGitHubProvider requires HttpExecutor.prepareRedirectUrlOptions logic, so, we need to redirect manually
+        redirect: "manual",
+      }
+      configureRequestUrl(url, requestOptions)
+      configureRequestOptions(requestOptions)
+      this.doDownload(requestOptions, {
+        destination: null,
+        options,
+        onCancel,
+        callback: error => {
+          if (error == null) {
+            resolve(result!!)
+          }
+          else {
+            reject(error)
+          }
+        },
+        responseHandler: (response, callback) => {
+          const contentLength = safeGetHeader(response, "content-length")
+          let position = -1
+          if (contentLength != null) {
+            const size = parseInt(contentLength, 10)
+            if (size > 0) {
+              if (size > 52428800) {
+                callback(new Error("Maximum allowed size is 50 MB"))
+                return
+              }
+
+              result = Buffer.alloc(size)
+              position = 0
+            }
+          }
+          response.on("data", (chunk: Buffer) => {
+            if (position !== -1) {
+              chunk.copy(result!!, position)
+              position += chunk.length
+            }
+            else if (result == null) {
+              result = chunk
+            }
+            else {
+              if (result.length > 52428800) {
+                callback(new Error("Maximum allowed size is 50 MB"))
+                return
+              }
+              result = Buffer.concat([result, chunk])
+            }
+          })
+          response.on("end", () => {
+            if (result != null && position !== -1 && position !== result.length) {
+              callback(new Error(`Received data length ${position} is not equal to expected ${result.length}`))
+            }
+            else {
+              callback(null)
+            }
+          })
+        },
+      }, 0)
+    })
+  }
+
+  protected doDownload(requestOptions: any, options: DownloadCallOptions, redirectCount: number) {
+    const request = this.createRequest(requestOptions, (response: IncomingMessage) => {
       if (response.statusCode! >= 400) {
-        callback(new Error(`Cannot download "${requestOptions.protocol || "https:"}//${requestOptions.hostname}${requestOptions.path}", status ${response.statusCode}: ${response.statusMessage}`))
+        options.callback(new Error(`Cannot download "${requestOptions.protocol || "https:"}//${requestOptions.hostname}${requestOptions.path}", status ${response.statusCode}: ${response.statusMessage}`))
         return
       }
 
+      // It is possible for the response stream to fail, e.g. when a network is lost while
+      // response stream is in progress. Stop waiting and reject so consumer can catch the error.
+      response.on("error", options.callback)
+
+      // this code not relevant for Electron (redirect event instead handled)
       const redirectUrl = safeGetHeader(response, "location")
       if (redirectUrl != null) {
         if (redirectCount < this.maxRedirects) {
-          this.doDownload(configureRequestOptionsFromUrl(redirectUrl, {...requestOptions}), destination, redirectCount++, options, callback, onCancel)
+          this.doDownload(HttpExecutor.prepareRedirectUrlOptions(redirectUrl, requestOptions), options, redirectCount++)
         }
         else {
-          callback(new Error(`Too many redirects (> ${this.maxRedirects})`))
+          options.callback(this.createMaxRedirectError())
         }
         return
       }
 
-      configurePipes(options, response, destination, callback, options.cancellationToken)
+      if (options.responseHandler == null) {
+        configurePipes(options, response)
+      }
+      else {
+        options.responseHandler(response, options.callback)
+      }
     })
-    this.addErrorAndTimeoutHandlers(request, callback)
-    onCancel(() => request.abort())
+    this.addErrorAndTimeoutHandlers(request, options.callback)
+    this.addRedirectHandlers(request, requestOptions, options.callback, redirectCount, requestOptions => {
+      this.doDownload(requestOptions, options, redirectCount++)
+    })
     request.end()
   }
 
-  protected addTimeOutHandler(request: any, callback: (error: Error) => void) {
+  protected createMaxRedirectError() {
+    return new Error(`Too many redirects (> ${this.maxRedirects})`)
+  }
+
+  private addTimeOutHandler(request: any, callback: (error: Error) => void) {
     request.on("socket", (socket: Socket) => {
       socket.setTimeout(60 * 1000, () => {
-        callback(new Error("Request timed out"))
         request.abort()
+        callback(new Error("Request timed out"))
       })
     })
   }
+
+  static prepareRedirectUrlOptions(redirectUrl: string, options: RequestOptions): RequestOptions {
+    const newOptions = configureRequestOptionsFromUrl(redirectUrl, {...options})
+    const headers = newOptions.headers
+    if (headers != null && headers.authorization != null && (headers.authorization as string).startsWith("token")) {
+      const parsedNewUrl = new URL(redirectUrl)
+      if (parsedNewUrl.hostname.endsWith(".amazonaws.com")) {
+        delete headers.authorization
+      }
+    }
+    return newOptions
+  }
+}
+
+export interface DownloadCallOptions {
+  responseHandler: ((response: IncomingMessage, callback: (error: Error | null) => void) => void) | null
+  onCancel: (callback: () => void) => void
+  callback: (error: Error | null) => void
+
+  options: DownloadOptions
+
+  destination: string | null
 }
 
 export function configureRequestOptionsFromUrl(url: string, options: RequestOptions) {
-  const parsedUrl = parseUrl(url)
-  options.protocol = parsedUrl.protocol
-  options.hostname = parsedUrl.hostname
-  if (parsedUrl.port == null) {
-    if (options.port != null) {
-      delete options.port
-    }
+  const result = configureRequestOptions(options)
+  configureRequestUrl(new URL(url), result)
+  return result
+}
+
+export function configureRequestUrl(url: URL, options: RequestOptions): void {
+  options.protocol = url.protocol
+  options.hostname = url.hostname
+  if (url.port) {
+    options.port = url.port
   }
-  else {
-    options.port = parsedUrl.port
+  else if (options.port) {
+    delete options.port
   }
-  options.path = parsedUrl.path
-  return configureRequestOptions(options)
+  options.path = url.pathname + url.search
 }
 
 export class DigestTransform extends Transform {
   private readonly digester: Hash
 
-  private _actual: string
+  private _actual: string | null = null
 
+  // noinspection JSUnusedGlobalSymbols
   get actual() {
     return this._actual
   }
@@ -215,11 +353,13 @@ export class DigestTransform extends Transform {
     this.digester = createHash(algorithm)
   }
 
-  _transform(chunk: any, encoding: string, callback: any) {
+  // noinspection JSUnusedGlobalSymbols
+  _transform(chunk: Buffer, encoding: string, callback: any) {
     this.digester.update(chunk)
     callback(null, chunk)
   }
 
+  // noinspection JSUnusedGlobalSymbols
   _flush(callback: any): void {
     this._actual = this.digester.digest(this.encoding)
 
@@ -238,11 +378,11 @@ export class DigestTransform extends Transform {
 
   validate() {
     if (this._actual == null) {
-      throw new Error("Not finished yet")
+      throw newError("Not finished yet", "ERR_STREAM_NOT_FINISHED")
     }
 
     if (this._actual !== this.expected) {
-      throw new Error(`${this.algorithm} checksum mismatch, expected ${this.expected}, got ${this._actual}`)
+      throw newError(`${this.algorithm} checksum mismatch, expected ${this.expected}, got ${this._actual}`, "ERR_CHECKSUM_MISMATCH")
     }
 
     return null
@@ -250,16 +390,9 @@ export class DigestTransform extends Transform {
 }
 
 function checkSha2(sha2Header: string | null | undefined, sha2: string | null | undefined, callback: (error: Error | null) => void): boolean {
-  if (sha2Header != null && sha2 != null) {
-    // todo why bintray doesn't send this header always
-    if (sha2Header == null) {
-      callback(new Error("checksum is required, but server response doesn't contain X-Checksum-Sha2 header"))
-      return false
-    }
-    else if (sha2Header !== sha2) {
-      callback(new Error(`checksum mismatch: expected ${sha2} but got ${sha2Header} (X-Checksum-Sha2 header)`))
-      return false
-    }
+  if (sha2Header != null && sha2 != null && sha2Header !== sha2) {
+    callback(new Error(`checksum mismatch: expected ${sha2} but got ${sha2Header} (X-Checksum-Sha2 header)`))
+    return false
   }
   return true
 }
@@ -278,42 +411,42 @@ export function safeGetHeader(response: any, headerKey: string) {
   }
 }
 
-function configurePipes(options: DownloadOptions, response: any, destination: string, callback: (error: Error | null) => void, cancellationToken: CancellationToken) {
-  if (!checkSha2(safeGetHeader(response, "X-Checksum-Sha2"), options.sha2, callback)) {
+function configurePipes(options: DownloadCallOptions, response: IncomingMessage) {
+  if (!checkSha2(safeGetHeader(response, "X-Checksum-Sha2"), options.options.sha2, options.callback)) {
     return
   }
 
   const streams: Array<any> = []
-  if (options.onProgress != null) {
+  if (options.options.onProgress != null) {
     const contentLength = safeGetHeader(response, "content-length")
     if (contentLength != null) {
-      streams.push(new ProgressCallbackTransform(parseInt(contentLength, 10), options.cancellationToken, options.onProgress))
+      streams.push(new ProgressCallbackTransform(parseInt(contentLength, 10), options.options.cancellationToken, options.options.onProgress))
     }
   }
 
-  const sha512 = options.sha512
+  const sha512 = options.options.sha512
   if (sha512 != null) {
     streams.push(new DigestTransform(sha512, "sha512", sha512.length === 128 && !sha512.includes("+") && !sha512.includes("Z") && !sha512.includes("=") ? "hex" : "base64"))
   }
-  else if (options.sha2 != null) {
-    streams.push(new DigestTransform(options.sha2, "sha256", "hex"))
+  else if (options.options.sha2 != null) {
+    streams.push(new DigestTransform(options.options.sha2, "sha256", "hex"))
   }
 
-  const fileOut = createWriteStream(destination)
+  const fileOut = createWriteStream(options.destination!!)
   streams.push(fileOut)
 
   let lastStream = response
   for (const stream of streams) {
     stream.on("error", (error: Error) => {
-      if (!cancellationToken.cancelled) {
-        callback(error)
+      if (!options.options.cancellationToken.cancelled) {
+        options.callback(error)
       }
     })
     lastStream = lastStream.pipe(stream)
   }
 
   fileOut.on("finish", () => {
-    (fileOut.close as any)(callback)
+    (fileOut.close as any)(options.callback)
   })
 }
 
@@ -322,11 +455,9 @@ export function configureRequestOptions(options: RequestOptions, token?: string 
     options.method = method
   }
 
-  let headers = options.headers
-  if (headers == null) {
-    headers = {}
-    options.headers = headers
-  }
+  options.headers = {...options.headers}
+  const headers = options.headers
+
   if (token != null) {
     (headers as any).authorization = token.startsWith("Basic") ? token : `token ${token}`
   }

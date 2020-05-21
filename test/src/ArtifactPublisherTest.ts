@@ -1,11 +1,11 @@
 import { Arch, copyFile, TmpDir } from "builder-util"
 import { CancellationToken, HttpError, S3Options, SpacesOptions } from "builder-util-runtime"
-import { createPublisher } from "electron-builder/out/publish/PublishManager"
+import { createPublisher } from "app-builder-lib/out/publish/PublishManager"
 import { PublishContext } from "electron-publish"
-import { BintrayPublisher } from "electron-publish/out/BintrayPublisher"
+import { BintrayPublisher } from "app-builder-lib/out/publish/BintrayPublisher"
 import { GitHubPublisher } from "electron-publish/out/gitHubPublisher"
-import isCi from "is-ci"
-import { join } from "path"
+import { isCI as isCi } from "ci-info"
+import * as path from "path"
 
 if (isCi && process.platform === "win32") {
   fit("Skip ArtifactPublisherTest suite on Windows CI", () => {
@@ -29,7 +29,7 @@ function versionNumber() {
 
 //noinspection SpellCheckingInspection
 const token = Buffer.from("Y2Y5NDdhZDJhYzJlMzg1OGNiNzQzYzcwOWZhNGI0OTk2NWQ4ZDg3Yg==", "base64").toString()
-const iconPath = join(__dirname, "..", "fixtures", "test-app", "build", "icon.icns")
+const iconPath = path.join(__dirname, "..", "fixtures", "test-app", "build", "icon.icns")
 
 const publishContext: PublishContext = {
   cancellationToken: new CancellationToken(),
@@ -38,7 +38,7 @@ const publishContext: PublishContext = {
 
 test("GitHub unauthorized", async () => {
   try {
-    await new GitHubPublisher(publishContext, {provider: "github", owner: "actperepo", repo: "ecb2", token: "incorrect token"}, versionNumber()).releasePromise
+    await new GitHubPublisher(publishContext, {provider: "github", owner: "actperepo", repo: "ecb2", token: "incorrect token"}, versionNumber())._release.value
   }
   catch (e) {
     expect(e.message).toMatch(/(Bad credentials|Unauthorized|API rate limit exceeded)/)
@@ -75,21 +75,22 @@ function testAndIgnoreApiRate(name: string, testFunction: () => Promise<any>) {
 }
 
 test("Bintray upload", async () => {
-  const version = versionNumber()
-
-  const tmpDir = new TmpDir()
-  const artifactPath = await tmpDir.getTempFile({suffix: ".icns"})
+  const version = "42.0.0"
+  const tmpDir = new TmpDir("artifact-publisher-test")
+  const artifactPath = await tmpDir.getTempFile({suffix: " test-space.icns"})
   await copyFile(iconPath, artifactPath)
 
   //noinspection SpellCheckingInspection
   const publisher = new BintrayPublisher(publishContext, {provider: "bintray", owner: "actperepo", package: "test", repo: "generic", token: "5df2cadec86dff91392e4c419540785813c3db15"}, version)
   try {
+    // force delete old version to ensure that test doesn't depend on previous runs
+    await publisher.deleteRelease(true)
     await publisher.upload({file: artifactPath, arch: Arch.x64})
     await publisher.upload({file: artifactPath, arch: Arch.x64})
   }
   finally {
     try {
-      await publisher.deleteRelease()
+      await publisher.deleteRelease(false)
     }
     finally {
       await tmpDir.cleanup()
@@ -111,7 +112,7 @@ testAndIgnoreApiRate("GitHub upload", async () => {
 
 if (process.env.AWS_ACCESS_KEY_ID != null && process.env.AWS_SECRET_ACCESS_KEY != null) {
   test("S3 upload", async () => {
-    const publisher = createPublisher(publishContext, "0.0.1", {provider: "s3", bucket: "electron-builder-test"} as S3Options, {})!!
+    const publisher = createPublisher(publishContext, "0.0.1", {provider: "s3", bucket: "electron-builder-test"} as S3Options, {}, {} as any)!!
     await publisher.upload({file: iconPath, arch: Arch.x64})
     // test overwrite
     await publisher.upload({file: iconPath, arch: Arch.x64})
@@ -125,7 +126,7 @@ if (process.env.DO_KEY_ID != null && process.env.DO_SECRET_KEY != null) {
       name: "electron-builder-test",
       region: "nyc3",
     }
-    const publisher = createPublisher(publishContext, "0.0.1", configuration, {})!!
+    const publisher = createPublisher(publishContext, "0.0.1", configuration, {}, {} as any)!!
     await publisher.upload({file: iconPath, arch: Arch.x64})
     // test overwrite
     await publisher.upload({file: iconPath, arch: Arch.x64})

@@ -1,15 +1,14 @@
-import BluebirdPromise from "bluebird-lst"
-import { outputFile } from "fs-extra-p"
-import { safeDump } from "js-yaml"
+import { outputFile } from "fs-extra"
+import { serializeToYaml } from "./util"
 
 export class DebugLogger {
   readonly data: any = {}
 
-  constructor(readonly enabled = true) {
+  constructor(readonly isEnabled = true) {
   }
 
   add(key: string, value: any) {
-    if (!this.enabled) {
+    if (!this.isEnabled) {
       return
     }
 
@@ -42,11 +41,11 @@ export class DebugLogger {
 
   save(file: string) {
     // toml and json doesn't correctly output multiline string as multiline
-    if (this.enabled && Object.keys(this.data).length > 0) {
-      return outputFile(file, safeDump(this.data))
+    if (this.isEnabled && Object.keys(this.data).length > 0) {
+      return outputFile(file, serializeToYaml(this.data))
     }
     else {
-      return BluebirdPromise.resolve()
+      return Promise.resolve()
     }
   }
 }

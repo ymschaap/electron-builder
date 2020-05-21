@@ -1,9 +1,8 @@
-import BluebirdPromise from "bluebird-lst"
 import { Platform } from "electron-builder"
-import { writeFile } from "fs-extra-p"
 import * as path from "path"
 import { CheckingMacPackager } from "../helpers/CheckingPackager"
 import { assertPack, createMacTargetTest, signed } from "../helpers/packTester"
+import { promises as fs } from "fs"
 
 if (process.platform !== "darwin") {
   fit("Skip mas tests because platform is not macOS", () => {
@@ -16,11 +15,11 @@ else if (process.env.CSC_KEY_PASSWORD == null) {
   })
 }
 
-test("mas", createMacTargetTest(["mas"]))
-test.ifAll("dev", createMacTargetTest(["mas-dev"]))
-test.ifAll("mas and 7z", createMacTargetTest(["mas", "7z"]))
+test.ifNotCi("mas", createMacTargetTest(["mas"]))
+test.ifNotCi.ifAll("dev", createMacTargetTest(["mas-dev"]))
+test.ifNotCi.ifAll("mas and 7z", createMacTargetTest(["mas", "7z"]))
 
-test.ifAll("custom mas", () => {
+test.skip.ifAll("custom mas", () => {
   let platformPackager: CheckingMacPackager | null = null
   return assertPack("test-app-one", signed({
     targets: Platform.MAC.createTarget(),
@@ -40,12 +39,12 @@ test.ifAll("custom mas", () => {
         entitlements: "mas-entitlements file path",
         "entitlements-inherit": "mas-entitlementsInherit file path",
       })
-      return BluebirdPromise.resolve(null)
+      return Promise.resolve(null)
     }
   })
 })
 
-test.ifAll("entitlements in the package.json", () => {
+test.ifAll.ifNotCi("entitlements in the package.json", () => {
   let platformPackager: CheckingMacPackager | null = null
   return assertPack("test-app-one", signed({
     targets: Platform.MAC.createTarget(),
@@ -62,27 +61,27 @@ test.ifAll("entitlements in the package.json", () => {
         entitlements: "osx-entitlements file path",
         "entitlements-inherit": "osx-entitlementsInherit file path",
       })
-      return BluebirdPromise.resolve()
+      return Promise.resolve()
     }
   })
 })
 
-test.ifAll("entitlements in build dir", () => {
+test.ifAll.ifNotCi("entitlements in build dir", () => {
   let platformPackager: CheckingMacPackager | null = null
   return assertPack("test-app-one", signed({
     targets: Platform.MAC.createTarget(),
     platformPackagerFactory: (packager, platform) => platformPackager = new CheckingMacPackager(packager),
   }), {
-    projectDirCreated: projectDir => BluebirdPromise.all([
-      writeFile(path.join(projectDir, "build", "entitlements.mac.plist"), ""),
-      writeFile(path.join(projectDir, "build", "entitlements.mac.inherit.plist"), ""),
+    projectDirCreated: projectDir => Promise.all([
+      fs.writeFile(path.join(projectDir, "build", "entitlements.mac.plist"), ""),
+      fs.writeFile(path.join(projectDir, "build", "entitlements.mac.inherit.plist"), ""),
     ]),
     packed: context => {
       expect(platformPackager!!.effectiveSignOptions).toMatchObject({
         entitlements: path.join(context.projectDir, "build", "entitlements.mac.plist"),
         "entitlements-inherit": path.join(context.projectDir, "build", "entitlements.mac.inherit.plist"),
       })
-      return BluebirdPromise.resolve()
+      return Promise.resolve()
     }
   })
 })

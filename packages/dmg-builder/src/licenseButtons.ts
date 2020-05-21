@@ -1,15 +1,13 @@
-import { PackageBuilder } from "builder-util/out/api"
-import { getLicenseAssets } from "builder-util/out/license"
-import _debug from "debug"
-import { readFile } from "fs-extra-p"
+import { log } from "builder-util"
+import { PlatformPackager } from "app-builder-lib"
+import { getLicenseAssets } from "app-builder-lib/out/util/license"
+import { readFile } from "fs-extra"
 import * as iconv from "iconv-lite"
 import { safeLoad } from "js-yaml"
 import { serializeString } from "./dmgUtil"
 import { getDefaultButtons } from "./licenseDefaultButtons"
 
-export const debug = _debug("electron-builder")
-
-export async function getLicenseButtonsFile(packager: PackageBuilder): Promise<Array<LicenseButtonsFile>> {
+export async function getLicenseButtonsFile(packager: PlatformPackager<any>): Promise<Array<LicenseButtonsFile>> {
   return getLicenseAssets((await packager.resourceList)
     .filter(it => {
       const name = it.toLowerCase()
@@ -34,9 +32,7 @@ export async function getLicenseButtons(licenseButtonFiles: Array<LicenseButtons
     }
 
     try {
-      const fileData = safeLoad(await
-        readFile(item.file, "utf-8")
-      )
+      const fileData = safeLoad(await readFile(item.file, "utf-8")) as any
       const buttonsStr = labelToHex(fileData.lang, item.lang, item.langWithRegion) +
         labelToHex(fileData.agree, item.lang, item.langWithRegion) +
         labelToHex(fileData.disagree, item.lang, item.langWithRegion) +
@@ -48,13 +44,13 @@ export async function getLicenseButtons(licenseButtonFiles: Array<LicenseButtons
       data += serializeString("0006" + buttonsStr)
       data += `\n};`
 
-      if (debug.enabled) {
-        debug(`Overwriting the ${item.langName} license buttons:\n${data}`)
+      if (log.isDebugEnabled) {
+        log.debug({lang: item.langName, data}, `overwriting license buttons`)
       }
       return data
     }
     catch (e) {
-      debug(`!Error while overwriting buttons: ${e}`)
+      log.debug({error: e}, "cannot overwrite license buttons")
       return data
     }
   }
@@ -85,7 +81,7 @@ function hexEncode(str: string, lang: string, langWithRegion: string) {
       result += hex
     }
     catch (e) {
-      debug(`there was a problem while trying to convert a char (${str[i]}) to hex: ${e}`)
+      log.debug({error: e, char: str[i]}, "cannot convert")
       result += "3F" //?
     }
   }

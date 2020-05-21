@@ -1,13 +1,12 @@
-import BluebirdPromise from "bluebird-lst"
-import { Arch, debug, exec, execWine, log, prepareWindowsExecutableArgs as prepareArgs, spawn } from "builder-util"
-import { copyFile, walk } from "builder-util/out/fs"
-import { WinPackager } from "electron-builder/out/winPackager"
-import { createWriteStream, ensureDir, remove, stat, unlink, writeFile } from "fs-extra-p"
-import * as path from "path"
 import { path7za } from "7zip-bin"
-import { compute7zCompressArgs } from "electron-builder/out/targets/archive"
-
-const archiver = require("archiver")
+import { Arch, debug, exec, log, spawn, isEmptyOrSpaces } from "builder-util"
+import { copyFile, walk } from "builder-util/out/fs"
+import { compute7zCompressArgs } from "app-builder-lib/out/targets/archive"
+import { execWine, prepareWindowsExecutableArgs as prepareArgs } from "app-builder-lib/out/wine"
+import { WinPackager } from "app-builder-lib/out/winPackager"
+import { createWriteStream, ensureDir, remove, stat, unlink, writeFile } from "fs-extra"
+import * as path from "path"
+import archiver from "archiver"
 
 export function convertVersion(version: string): string {
   const parts = version.split("-")
@@ -21,7 +20,7 @@ export function convertVersion(version: string): string {
 }
 
 function syncReleases(outputDirectory: string, options: SquirrelOptions) {
-  log("Sync releases to build delta package")
+  log.info("syncing releases to build delta package")
   const args = prepareArgs(["-u", options.remoteReleases!, "-r", outputDirectory], path.join(options.vendorPath, "SyncReleases.exe"))
   if (options.remoteToken) {
     args.push("-t", options.remoteToken)
@@ -57,17 +56,22 @@ export class SquirrelBuilder {
   constructor(private readonly options: SquirrelOptions, private readonly outputDirectory: string, private readonly packager: WinPackager) {
   }
 
-  async buildInstaller(outFileNames: OutFileNames, appOutDir: string, outDir: string, arch: Arch, dirToArchive: string) {
+  async buildInstaller(outFileNames: OutFileNames, appOutDir: string, outDir: string, arch: Arch) {
+    const packager = this.packager
+    const dirToArchive = await packager.info.tempDirManager.createTempDir({prefix: "squirrel-windows"})
     const outputDirectory = this.outputDirectory
     const options = this.options
     const appUpdate = path.join(dirToArchive, "Update.exe")
-    const packager = this.packager
-    await BluebirdPromise.all([
+    await Promise.all([
       copyFile(path.join(options.vendorPath, "Update.exe"), appUpdate)
         .then(() => packager.sign(appUpdate)),
-      BluebirdPromise.all([remove(`${outputDirectory.replace(/\\/g, "/")}/*-full.nupkg`), remove(path.join(outputDirectory, "RELEASES"))])
+      Promise.all([remove(`${outputDirectory.replace(/\\/g, "/")}/*-full.nupkg`), remove(path.join(outputDirectory, "RELEASES"))])
         .then(() => ensureDir(outputDirectory))
     ])
+
+    if (isEmptyOrSpaces(options.description)) {
+      options.description = options.productName
+    }
 
     if (options.remoteReleases) {
       await syncReleases(outputDirectory, options)
@@ -77,7 +81,7 @@ export class SquirrelBuilder {
     const nupkgPath = path.join(outputDirectory, outFileNames.packageFile)
     const setupPath = path.join(outputDirectory, outFileNames.setupFile)
 
-    await BluebirdPromise.all<any>([
+    await Promise.all<any>([
       pack(options, appOutDir, appUpdate, nupkgPath, version, packager),
       copyFile(path.join(options.vendorPath, "Setup.exe"), setupPath),
       copyFile(options.loadingGif ? path.resolve(packager.projectDir, options.loadingGif) : path.join(options.vendorPath, "install-spinner.gif"), path.join(dirToArchive, "background.gif")),
@@ -89,7 +93,7 @@ export class SquirrelBuilder {
 
     const embeddedArchiveFile = await this.createEmbeddedArchiveFile(nupkgPath, dirToArchive)
 
-    await execWine(path.join(options.vendorPath, "WriteZipToSetup.exe"), [setupPath, embeddedArchiveFile])
+    await execWine(path.join(options.vendorPath, "WriteZipToSetup.exe"), null, [setupPath, embeddedArchiveFile])
 
     await packager.signAndEditResources(setupPath, arch, outDir)
     if (options.msi && process.platform === "win32") {
@@ -105,7 +109,7 @@ export class SquirrelBuilder {
       "--releasify", nupkgPath,
       "--releaseDir", this.outputDirectory
     ]
-    const out = (await exec(process.platform === "win32" ? path.join(this.options.vendorPath, "Update.com") : "mono", prepareArgs(args, path.join(this.options.vendorPath, "Update-Mono.exe")))).trim()
+    const out = (await execSw(this.options, args)).trim()
     if (debug.enabled) {
       debug(`Squirrel output: ${out}`)
     }
@@ -123,10 +127,16 @@ export class SquirrelBuilder {
 
   private async createEmbeddedArchiveFile(nupkgPath: string, dirToArchive: string) {
     const embeddedArchiveFile = await this.packager.getTempFile("setup.zip")
-    await exec(path7za, compute7zCompressArgs("zip", this.packager.compression, {isRegularFile: true}).concat(embeddedArchiveFile, "."), {
+    await exec(path7za, compute7zCompressArgs("zip", {
+      isRegularFile: true,
+      compression: this.packager.compression,
+    }).concat(embeddedArchiveFile, "."), {
       cwd: dirToArchive,
     })
-    await exec(path7za, compute7zCompressArgs("zip", "store" /* nupkg is already compressed */, {isRegularFile: true}).concat(embeddedArchiveFile, nupkgPath))
+    await exec(path7za, compute7zCompressArgs("zip", {
+      isRegularFile: true,
+      compression: "store" /* nupkg is already compressed */,
+    }).concat(embeddedArchiveFile, nupkgPath))
     return embeddedArchiveFile
   }
 }
@@ -135,7 +145,7 @@ async function pack(options: SquirrelOptions, directory: string, updateFile: str
   // SW now doesn't support 0-level nupkg compressed files. It means that we are forced to use level 1 if store level requested.
   const archive = archiver("zip", {zlib: {level: Math.max(1, (options.packageCompressionLevel == null ? 9 : options.packageCompressionLevel))}})
   const archiveOut = createWriteStream(outFile)
-  const archivePromise = new BluebirdPromise((resolve, reject) => {
+  const archivePromise = new Promise((resolve, reject) => {
     archive.on("error", reject)
     archiveOut.on("error", reject)
     archiveOut.on("close", resolve)
@@ -158,7 +168,7 @@ async function pack(options: SquirrelOptions, directory: string, updateFile: str
   </metadata>
 </package>`
   debug(`Created NuSpec file:\n${nuspecContent}`)
-  archive.append(nuspecContent.replace(/\n/, "\r\n"), {name: `${encodeURI(options.name).replace(/%5B/g, "[").replace(/%5D/g, "]")}.nuspec`})
+  archive.append(nuspecContent.replace(/\n/, "\r\n"), {name: `${options.name}.nuspec`})
 
   //noinspection SpellCheckingInspection
   archive.append(`<?xml version="1.0" encoding="utf-8"?>
@@ -203,12 +213,21 @@ async function pack(options: SquirrelOptions, directory: string, updateFile: str
   await archivePromise
 }
 
+function execSw(options: SquirrelOptions, args: Array<string>) {
+  return exec(process.platform === "win32" ? path.join(options.vendorPath, "Update.com") : "mono", prepareArgs(args, path.join(options.vendorPath, "Update-Mono.exe")), {
+    env: {
+      ...process.env,
+      SZA_PATH: path7za,
+    }
+  })
+}
+
 async function msi(options: SquirrelOptions, nupkgPath: string, setupPath: string, outputDirectory: string, outFile: string) {
   const args = [
     "--createMsi", nupkgPath,
     "--bootstrapperExe", setupPath
   ]
-  await exec(process.platform === "win32" ? path.join(options.vendorPath, "Update.com") : "mono", prepareArgs(args, path.join(options.vendorPath, "Update-Mono.exe")))
+  await execSw(options, args)
   //noinspection SpellCheckingInspection
   await exec(path.join(options.vendorPath, "candle.exe"), ["-nologo", "-ext", "WixNetFxExtension", "-out", "Setup.wixobj", "Setup.wxs"], {
     cwd: outputDirectory,
@@ -219,7 +238,7 @@ async function msi(options: SquirrelOptions, nupkgPath: string, setupPath: strin
   })
 
   //noinspection SpellCheckingInspection
-  await BluebirdPromise.all([
+  await Promise.all([
     unlink(path.join(outputDirectory, "Setup.wxs")),
     unlink(path.join(outputDirectory, "Setup.wixobj")),
     unlink(path.join(outputDirectory, outFile.replace(".msi", ".wixpdb"))).catch(e => debug(e.toString())),
@@ -234,8 +253,7 @@ async function encodedZip(archive: any, dir: string, prefix: string, vendorPath:
         return
       }
 
-      // GBK file name encoding (or Non-English file name) caused a problem
-      const relativeSafeFilePath = encodeURI(file.substring(dir.length + 1).replace(/\\/g, "/")).replace(/%5B/g, "[").replace(/%5D/g, "]")
+      const relativeSafeFilePath = file.substring(dir.length + 1).replace(/\\/g, "/")
       archive._append(file, {
         name: relativeSafeFilePath,
         prefix,
@@ -247,7 +265,7 @@ async function encodedZip(archive: any, dir: string, prefix: string, vendorPath:
       if (file.endsWith(".exe") && !file.includes("squirrel.exe") && !relativeSafeFilePath.includes("/")) {
         const tempFile = await packager.getTempFile("stub.exe")
         await copyFile(path.join(vendorPath, "StubExecutable.exe"), tempFile)
-        await execWine(path.join(vendorPath, "WriteZipToSetup.exe"), ["--copy-stub-resources", file, tempFile])
+        await execWine(path.join(vendorPath, "WriteZipToSetup.exe"), null, ["--copy-stub-resources", file, tempFile])
         await packager.sign(tempFile)
 
         archive._append(tempFile, {

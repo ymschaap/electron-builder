@@ -1,33 +1,36 @@
-import BluebirdPromise from "bluebird-lst/index"
-import { readdir, unlink } from "fs-extra-p"
-import isCi from "is-ci"
+import { isCI as isCi } from "ci-info"
 import * as path from "path"
-import { ELECTRON_VERSION } from "./testConfig"
+import { promises as fs } from "fs"
+import { ELECTRON_VERSION, getElectronCacheDir } from "./testConfig"
 
-const downloadElectron: (options: any) => Promise<any> = BluebirdPromise.promisify(require("electron-download-tf"))
+const executeAppBuilder: (options: any) => Promise<any> = require(path.join(__dirname, "../../..", "packages/builder-util")).executeAppBuilder
 
-export function deleteOldElectronVersion(): Promise<any> {
+export async function deleteOldElectronVersion(): Promise<any> {
   // on CircleCi no need to clean manually
   if (process.env.CIRCLECI || !isCi) {
-    return BluebirdPromise.resolve()
+    return
   }
 
-  const cacheDir = require("env-paths")("electron", {suffix: ""}).cache
-  return BluebirdPromise.map(readdir(cacheDir), (file): any => {
+  const cacheDir = getElectronCacheDir()
+  let files: Array<string>
+  try {
+    files = await fs.readdir(cacheDir)
+  }
+  catch (e) {
+    if (e.code === "ENOENT") {
+      return
+    }
+    else {
+      throw e
+    }
+  }
+  return await Promise.all(files.map(file => {
     if (file.endsWith(".zip") && !file.includes(ELECTRON_VERSION)) {
       console.log(`Remove old electron ${file}`)
-      return unlink(path.join(cacheDir, file))
+      return fs.unlink(path.join(cacheDir, file))
     }
-    return null
-  })
-    .catch(e => {
-      if (e.code === "ENOENT") {
-        return []
-      }
-      else {
-        throw e
-      }
-    })
+    return Promise.resolve(null)
+  }))
 }
 
 export function downloadAllRequiredElectronVersions(): Promise<any> {
@@ -38,7 +41,7 @@ export function downloadAllRequiredElectronVersions(): Promise<any> {
 
   const versions: Array<any> = []
   for (const platform of platforms) {
-    const archs = (platform === "mas" || platform === "darwin") ? ["x64"] : (platform === "win32" ? ["ia32", "x64"] : ["ia32", "x64", "armv7l"])
+    const archs = (platform === "mas" || platform === "darwin") ? ["x64"] : (platform === "win32" ? ["ia32", "x64"] : require(`${path.join(__dirname, "../../..")}/packages/builder-util/out/util`).getArchCliNames())
     for (const arch of archs) {
       versions.push({
         version: ELECTRON_VERSION,
@@ -47,7 +50,7 @@ export function downloadAllRequiredElectronVersions(): Promise<any> {
       })
     }
   }
-  return BluebirdPromise.map(versions, it => downloadElectron(it), {concurrency: 3})
+  return executeAppBuilder(["download-electron", "--configuration", JSON.stringify(versions)])
 }
 
 if (process.mainModule === module) {

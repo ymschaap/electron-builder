@@ -1,51 +1,35 @@
-import BluebirdPromise from "bluebird-lst"
-import { addValue, Arch, archFromString, isEmptyOrSpaces, warn } from "builder-util"
-import { CancellationToken } from "builder-util-runtime"
-import { executeFinally } from "builder-util/out/promise"
+import { addValue, Arch, archFromString, deepAssign } from "builder-util"
 import chalk from "chalk"
+import { build as _build, Configuration, DIR_TARGET, Packager, PackagerOptions, Platform } from "app-builder-lib"
 import { PublishOptions } from "electron-publish"
-import { deepAssign } from "read-config-file/out/deepAssign"
-import { Configuration } from "./configuration"
-import { DIR_TARGET, Platform } from "./core"
-import { normalizePlatforms, Packager } from "./packager"
-import { PackagerOptions } from "./packagerApi"
-import { PublishManager } from "./publish/PublishManager"
+import yargs from "yargs"
 
-/** @internal */
+export function createYargs() {
+  return yargs
+    .parserConfiguration({
+      "camel-case-expansion": false,
+    })
+}
+
 export interface BuildOptions extends PackagerOptions, PublishOptions {
 }
 
 export interface CliOptions extends PackagerOptions, PublishOptions {
-  mac?: Array<string>
-  linux?: Array<string>
-  win?: Array<string>
-
-  arch?: string
-
   x64?: boolean
   ia32?: boolean
   armv7l?: boolean
+  arm64?: boolean
 
   dir?: boolean
-
-  platform?: string
-
-  project?: string
-
-  extraMetadata?: any
 }
 
-/** @internal */
+/** @private */
 export function normalizeOptions(args: CliOptions): BuildOptions {
   if (args.targets != null) {
     return args
   }
 
-  if ((args as any).draft != null || (args as any).prerelease != null) {
-    warn("--draft and --prerelease is deprecated, please set releaseType (http://electron.build/configuration/publish#GithubOptions-releaseType) in the GitHub publish options instead")
-  }
-
-  let targets = new Map<Platform, Map<Arch, Array<string>>>()
+  const targets = new Map<Platform, Map<Arch, Array<string>>>()
 
   function processTargets(platform: Platform, types: Array<string>) {
     function commonArch(currentIfNotSpecified: boolean): Array<Arch> {
@@ -60,18 +44,14 @@ export function normalizeOptions(args: CliOptions): BuildOptions {
       if (args.armv7l) {
         result.push(Arch.armv7l)
       }
+      if (args.arm64) {
+        result.push(Arch.arm64)
+      }
       if (args.ia32) {
         result.push(Arch.ia32)
       }
 
       return result.length === 0 && currentIfNotSpecified ? [archFromString(process.arch)] : result
-    }
-
-    if (args.platform != null) {
-      throw new Error(`--platform cannot be used if --${platform.buildConfigurationKey} is passed`)
-    }
-    if (args.arch != null) {
-      throw new Error(`--arch cannot be used if --${platform.buildConfigurationKey} is passed`)
     }
 
     let archToType = targets.get(platform)
@@ -114,27 +94,18 @@ export function normalizeOptions(args: CliOptions): BuildOptions {
   }
 
   if (targets.size === 0) {
-    if (args.platform == null && args.arch == null) {
-      processTargets(Platform.current(), [])
-    }
-    else {
-      targets = createTargets(normalizePlatforms(args.platform), args.dir ? DIR_TARGET : null, args.arch)
-    }
+    processTargets(Platform.current(), [])
   }
 
-  const result = {...args}
+  const result: any = {...args}
   result.targets = targets
 
   delete result.dir
   delete result.mac
   delete result.linux
   delete result.win
-  delete result.platform
-  delete result.arch
 
   const r = result as any
-  delete r.em
-
   delete r.m
   delete r.o
   delete r.l
@@ -146,24 +117,20 @@ export function normalizeOptions(args: CliOptions): BuildOptions {
   delete r.version
   delete r.help
   delete r.c
+  delete r.p
+  delete r.pd
 
   delete result.ia32
   delete result.x64
   delete result.armv7l
-
-  if (result.project != null && result.projectDir == null) {
-    result.projectDir = result.project
-  }
-  delete result.project
+  delete result.arm64
 
   let config = result.config
-  const extraMetadata = result.extraMetadata
-  delete result.extraMetadata
 
-  // config is array when combining dot-notation values with a config file value (#2016)
+  // config is array when combining dot-notation values with a config file value
+  // https://github.com/electron-userland/electron-builder/issues/2016
   if (Array.isArray(config)) {
     const newConfig: Configuration = {}
-
     for (const configItem of config) {
       if (typeof configItem === "object") {
         deepAssign(newConfig, configItem)
@@ -177,31 +144,30 @@ export function normalizeOptions(args: CliOptions): BuildOptions {
     result.config = newConfig
   }
 
-  if (extraMetadata != null) {
-    if (typeof config === "string") {
-      // transform to object and specify path to config as extends
-      config = {
-        extends: config,
-        extraMetadata,
-      };
-      (result as any).config = config
-    }
-    else if (config == null) {
-      config = {};
-      (result as any).config = config
-    }
-    (config as any).extraMetadata = extraMetadata
-  }
-
+  // AJV cannot coerce "null" string to null if string is also allowed (because null string is a valid value)
   if (config != null && typeof config !== "string") {
     if (config.extraMetadata != null) {
       coerceTypes(config.extraMetadata)
     }
+
+    // ability to disable code sign using -c.mac.identity=null
     if (config.mac != null) {
-      // ability to disable code sign using -c.mac.identity=null
       coerceValue(config.mac, "identity")
     }
+
+    // fix Boolean type by coerceTypes
+    if (config.nsis != null) {
+      coerceTypes(config.nsis)
+    }
+    if (config.nsisWeb != null) {
+      coerceTypes(config.nsisWeb)
+    }
   }
+
+  if ("project" in r && !("projectDir" in result)) {
+    result.projectDir = r.project
+  }
+  delete r.project
 
   return result as BuildOptions
 }
@@ -247,59 +213,17 @@ export function createTargets(platforms: Array<Platform>, type?: string | null, 
   return targets
 }
 
-export async function build(rawOptions?: CliOptions): Promise<Array<string>> {
-  const options = normalizeOptions(rawOptions || {})
-
-  if (options.cscLink === undefined && !isEmptyOrSpaces(process.env.CSC_LINK)) {
-    options.cscLink = process.env.CSC_LINK
-  }
-  if (options.cscInstallerLink === undefined && !isEmptyOrSpaces(process.env.CSC_INSTALLER_LINK)) {
-    options.cscInstallerLink = process.env.CSC_INSTALLER_LINK
-  }
-  if (options.cscKeyPassword === undefined && !isEmptyOrSpaces(process.env.CSC_KEY_PASSWORD)) {
-    options.cscKeyPassword = process.env.CSC_KEY_PASSWORD
-  }
-  if (options.cscInstallerKeyPassword === undefined && !isEmptyOrSpaces(process.env.CSC_INSTALLER_KEY_PASSWORD)) {
-    options.cscInstallerKeyPassword = process.env.CSC_INSTALLER_KEY_PASSWORD
-  }
-
-  const cancellationToken = new CancellationToken()
-  const packager = new Packager(options, cancellationToken)
-  // because artifact event maybe dispatched several times for different publish providers
-  const artifactPaths = new Set<string>()
-  packager.artifactCreated(event => {
-    if (event.file != null) {
-      artifactPaths.add(event.file)
-    }
-  })
-
-  const publishManager = new PublishManager(packager, options, cancellationToken)
-  process.on("SIGINT", () => {
-    warn("Cancelled by SIGINT")
-    cancellationToken.cancel()
-    publishManager.cancelTasks()
-  })
-
-  return await executeFinally(packager.build().then(() => Array.from(artifactPaths)), errorOccurred => {
-    if (errorOccurred) {
-      publishManager.cancelTasks()
-      return BluebirdPromise.resolve(null)
-    }
-    else {
-      return publishManager.awaitTasks()
-    }
-  })
+export function build(rawOptions?: CliOptions): Promise<Array<string>> {
+  const buildOptions = normalizeOptions(rawOptions || {})
+  return _build(buildOptions, new Packager(buildOptions))
 }
 
 /**
  * @private
- * @internal
  */
-export function configureBuildCommand(yargs: yargs.Yargs): yargs.Yargs {
+export function configureBuildCommand(yargs: yargs.Argv): yargs.Argv {
   const publishGroup = "Publishing:"
   const buildGroup = "Building:"
-  const deprecated = "Deprecated:"
-
   return yargs
     .option("mac", {
       group: buildGroup,
@@ -334,6 +258,11 @@ export function configureBuildCommand(yargs: yargs.Yargs): yargs.Yargs {
       description: "Build for armv7l",
       type: "boolean",
     })
+    .option("arm64", {
+      group: buildGroup,
+      description: "Build for arm64",
+      type: "boolean",
+    })
     .option("dir", {
       group: buildGroup,
       description: "Build unpacked dir. Useful to test.",
@@ -342,35 +271,8 @@ export function configureBuildCommand(yargs: yargs.Yargs): yargs.Yargs {
     .option("publish", {
       group: publishGroup,
       alias: "p",
-      description: `Publish artifacts (to GitHub Releases), see ${chalk.underline("https://goo.gl/tSFycD")}`,
+      description: `Publish artifacts, see ${chalk.underline("https://goo.gl/tSFycD")}`,
       choices: ["onTag", "onTagOrDraft", "always", "never", undefined as any],
-    })
-    .option("draft", {
-      group: deprecated,
-      description: "Please set releaseType in the GitHub publish options instead",
-      type: "boolean",
-      default: undefined,
-    })
-    .option("prerelease", {
-      group: deprecated,
-      description: "Please set releaseType in the GitHub publish options instead",
-      type: "boolean",
-      default: undefined,
-    })
-    .option("platform", {
-      group: deprecated,
-      description: "The target platform (preferred to use --mac, --win or --linux)",
-      choices: ["mac", "win", "linux", "darwin", "win32", "all", undefined as any],
-    })
-    .option("arch", {
-      group: deprecated,
-      description: "The target arch (preferred to use --x64 or --ia32)",
-      choices: ["ia32", "x64", "all", undefined as any],
-    })
-    .option("extraMetadata", {
-      alias: ["em"],
-      group: buildGroup,
-      description: "Deprecated. Use -c.extraMetadata.",
     })
     .option("prepackaged", {
       alias: ["pd"],
@@ -391,6 +293,6 @@ export function configureBuildCommand(yargs: yargs.Yargs): yargs.Yargs {
     .example("electron-builder -mwl", "build for macOS, Windows and Linux")
     .example("electron-builder --linux deb tar.xz", "build deb and tar.xz for Linux")
     .example("electron-builder --win --ia32", "build for Windows ia32")
-    .example("electron-builder --em.foo=bar", "set package.json property `foo` to `bar`")
+    .example("electron-builder -c.extraMetadata.foo=bar", "set package.json property `foo` to `bar`")
     .example("electron-builder --config.nsis.unicode=false", "configure unicode options for NSIS")
 }

@@ -6,12 +6,11 @@ set -e
 # But for what, if you are already configure Git access?
 # Also, this approach allows us to manage access using GitHub and easily give access to publish to project members.
 
-
 # https://stackoverflow.com/questions/3311774/how-to-convert-existing-non-empty-directory-into-a-git-working-directory-and-pus
 
-cd _book
+cd site
 
-mkdir sponsor-logos
+mkdir sponsor-logos || true
 cp ../scripts/sponsor-logos/*.svg sponsor-logos/
 
 # do not use force push - netlify doesn't trigger deploy for forced push

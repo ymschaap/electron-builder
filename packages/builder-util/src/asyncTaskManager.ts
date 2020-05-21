@@ -1,7 +1,6 @@
-import BluebirdPromise from "bluebird-lst"
 import { CancellationToken } from "builder-util-runtime"
+import { log } from "./log"
 import { NestedError } from "./promise"
-import { debug } from "./util"
 
 export class AsyncTaskManager {
   readonly tasks: Array<Promise<any>> = []
@@ -18,7 +17,7 @@ export class AsyncTaskManager {
 
   addTask(promise: Promise<any>) {
     if (this.cancellationToken.cancelled) {
-      debug(`Async task not added because cancelled: ${new Error().stack}`)
+      log.debug({reason: "cancelled", stack: new Error().stack}, "async task not added")
       if ("cancel" in promise) {
         (promise as any).cancel()
       }
@@ -27,9 +26,9 @@ export class AsyncTaskManager {
 
     this.tasks.push(promise
       .catch(it => {
-        debug(`Async task error: ${it.stack || it}`)
+        log.debug({error: it.message || it.toString()}, "async task error")
         this.errors.push(it)
-        return BluebirdPromise.resolve(null)
+        return Promise.resolve(null)
       }))
   }
 
@@ -63,7 +62,7 @@ export class AsyncTaskManager {
     let list = tasks.slice()
     tasks.length = 0
     while (list.length > 0) {
-      const subResult = await BluebirdPromise.all(list)
+      const subResult = await Promise.all(list)
       result = result == null ? subResult : result.concat(subResult)
       checkErrors()
       if (tasks.length === 0) {

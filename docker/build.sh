@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-docker build -t electronuserland/builder:base docker/base
+docker build -t electronuserland/builder:base -t electronuserland/builder:base-06.19 docker/base
 
-docker build -t electronuserland/builder:8 -t electronuserland/builder:latest docker/8
-docker build -t electronuserland/builder:6 docker/6
+docker build -t electronuserland/builder:12 -t electronuserland/builder:latest -t electronuserland/builder:12-06.19 docker/node
 
 docker build -t electronuserland/builder:wine docker/wine
 docker build -t electronuserland/builder:wine-mono docker/wine-mono

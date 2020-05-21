@@ -1,35 +1,38 @@
-import { Arch, build, DIR_TARGET, Platform } from "electron-builder"
-import { move, readFile } from "fs-extra-p"
-import { safeLoad } from "js-yaml"
+import { Arch, build, PackagerOptions, Platform } from "electron-builder"
+import { promises as fs } from "fs"
 import * as path from "path"
 import { assertThat } from "./helpers/fileAssert"
 import { app, assertPack, linuxDirTarget, modifyPackageJson } from "./helpers/packTester"
+import { getElectronCacheDir } from "./helpers/testConfig"
 import { expectUpdateMetadata } from "./helpers/winHelper"
 
-function createBuildResourcesTest(platform: Platform) {
+function createBuildResourcesTest(packagerOptions: PackagerOptions) {
   return app({
-    // only dir - avoid DMG
-    targets: platform.createTarget(platform === Platform.MAC ? DIR_TARGET : null),
+    ...packagerOptions,
     config: {
       publish: null,
       directories: {
         buildResources: "custom",
-        output: "customDist",
+        // tslint:disable:no-invalid-template-strings
+        output: "customDist/${channel}",
         // https://github.com/electron-userland/electron-builder/issues/601
         app: ".",
-      }
+      },
+      nsis: {
+        differentialPackage: false,
+      },
     },
   }, {
     packed: async context => {
-      await assertThat(path.join(context.projectDir, "customDist")).isDirectory()
+      await assertThat(path.join(context.projectDir, "customDist", "latest")).isDirectory()
     },
-    projectDirCreated: projectDir => move(path.join(projectDir, "build"), path.join(projectDir, "custom"))
+    projectDirCreated: projectDir => fs.rename(path.join(projectDir, "build"), path.join(projectDir, "custom"))
   })
 }
 
-test.ifAll.ifNotWindows("custom buildResources and output dirs: mac", createBuildResourcesTest(Platform.MAC))
-test.ifAll.ifNotCiMac("custom buildResources and output dirs: win", createBuildResourcesTest(Platform.WINDOWS))
-test.ifAll.ifNotWindows("custom buildResources and output dirs: linux", createBuildResourcesTest(Platform.LINUX))
+test.ifAll.ifNotWindows("custom buildResources and output dirs: mac", createBuildResourcesTest({mac: ["dir"]}))
+test.ifAll.ifNotCiMac("custom buildResources and output dirs: win", createBuildResourcesTest({win: ["nsis"]}))
+test.ifAll.ifNotWindows("custom buildResources and output dirs: linux", createBuildResourcesTest({linux: ["appimage"]}))
 
 test.ifAll.ifLinuxOrDevMac("prepackaged", app({
   targets: linuxDirTarget,
@@ -37,7 +40,7 @@ test.ifAll.ifLinuxOrDevMac("prepackaged", app({
   packed: async context => {
     await build({
       prepackaged: path.join(context.outDir, "linux-unpacked"),
-      project: context.projectDir,
+      projectDir: context.projectDir,
       linux: [],
       config: {
         // test target
@@ -58,6 +61,22 @@ test.ifAll.ifLinuxOrDevMac("retrieve latest electron version", app({
   targets: linuxDirTarget,
 }, {
   projectDirCreated: projectDir => modifyPackageJson(projectDir, data => {
+    data.devDependencies = {
+      ...data.devDependencies,
+      electron: "latest",
+    }
+    delete data.build.electronVersion
+  }),
+}))
+
+test.ifAll.ifLinuxOrDevMac("retrieve latest electron-nightly version", app({
+  targets: linuxDirTarget,
+}, {
+  projectDirCreated: projectDir => modifyPackageJson(projectDir, data => {
+    data.devDependencies = {
+      ...data.devDependencies,
+      "electron-nightly": "latest",
+    }
     delete data.build.electronVersion
   }),
 }))
@@ -106,28 +125,22 @@ test.ifAll.ifDevOrWinCi("override targets in the config - only arch", app({
     },
   },
 }, {
-  packed: async context => {
-    await assertThat(path.join(context.projectDir, "dist", "win-unpacked")).doesNotExist()
-    await assertThat(path.join(context.projectDir, "dist", "latest.yml")).doesNotExist()
-    await expectUpdateMetadata(context, Arch.ia32)
-
-    const updateInfo = safeLoad(await readFile(path.join(context.outDir, "beta.yml"), "utf-8"))
-    expect(updateInfo.sha2).not.toEqual("")
-    expect(updateInfo.releaseDate).not.toEqual("")
-    delete updateInfo.sha2
-    delete updateInfo.sha512
-    delete updateInfo.releaseDate
-    expect(updateInfo).toMatchSnapshot()
+  packed: context => {
+    return Promise.all([
+      assertThat(path.join(context.projectDir, "dist", "win-unpacked")).doesNotExist(),
+      assertThat(path.join(context.projectDir, "dist", "latest.yml")).doesNotExist(),
+      expectUpdateMetadata(context, Arch.ia32),
+    ])
   },
 }))
 
 // test on all CI to check path separators
 test.ifAll("do not exclude build entirely (respect files)", () => assertPack("test-app-build-sub", {targets: linuxDirTarget}))
 
-test.ifAll("electronDist as path to local folder with electron builds zipped ", app({
+test.ifNotWindows("electronDist as path to local folder with electron builds zipped ", app({
   targets: linuxDirTarget,
   config: {
-    electronDist: require("env-paths")("electron", {suffix: ""}).cache,
+    electronDist: getElectronCacheDir(),
   },
 }))
 

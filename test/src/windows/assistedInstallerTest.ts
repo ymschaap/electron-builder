@@ -1,6 +1,5 @@
 import { Arch, archFromString, Platform } from "electron-builder"
-import { readFile, writeFile } from "fs-extra-p"
-import { safeLoad } from "js-yaml"
+import { promises as fs } from "fs"
 import * as path from "path"
 import { app, assertPack, copyTestAsset } from "../helpers/packTester"
 import { checkHelpers, doTest, expectUpdateMetadata } from "../helpers/winHelper"
@@ -20,14 +19,13 @@ test.ifNotCiMac("assisted", app({
   }
 }, {
   signedWin: true,
-  projectDirCreated: projectDir => {
-    return copyTestAsset("license.txt", path.join(projectDir, "build", "license.txt"))
-  },
+  projectDirCreated: projectDir => copyTestAsset("license.txt", path.join(projectDir, "build", "license.txt")),
 }))
 
 test.ifAll.ifNotCiMac("allowElevation false, app requestedExecutionLevel admin", app({
   targets: nsisTarget,
   config: {
+    publish: null,
     extraMetadata: {
       // mt.exe doesn't like unicode names from wine
       name: "test",
@@ -41,7 +39,8 @@ test.ifAll.ifNotCiMac("allowElevation false, app requestedExecutionLevel admin",
       allowElevation: false,
       perMachine: true,
       displayLanguageSelector: true,
-      installerLanguages: ["en_US", "ru_RU"]
+      installerLanguages: ["en_US", "ru_RU"],
+      differentialPackage: false,
     },
   }
 }))
@@ -51,8 +50,10 @@ test.ifNotCiMac("assisted, MUI_HEADER", () => {
   return assertPack("test-app-one", {
       targets: nsisTarget,
       config: {
+        publish: null,
         nsis: {
           oneClick: false,
+          differentialPackage: false,
         }
       },
       effectiveOptionComputed: async it => {
@@ -77,9 +78,11 @@ test.ifAll.ifNotCiMac("assisted, MUI_HEADER as option", () => {
   return assertPack("test-app-one", {
       targets: Platform.WINDOWS.createTarget(["nsis"], Arch.ia32, Arch.x64),
       config: {
+        publish: null,
         nsis: {
           oneClick: false,
-          installerHeader: "foo.bmp"
+          installerHeader: "foo.bmp",
+          differentialPackage: false,
         }
       },
       effectiveOptionComputed: async it => {
@@ -126,17 +129,11 @@ test.ifAll.ifNotCiMac("allowToChangeInstallationDirectory", app({
   },
 }, {
   projectDirCreated: async projectDir => {
-    await writeFile(path.join(projectDir, "build", "release-notes.md"), "New release with new bugs and\n\nwithout features")
+    await fs.writeFile(path.join(projectDir, "build", "release-notes.md"), "New release with new bugs and\n\nwithout features")
+    await copyTestAsset("license.txt", path.join(projectDir, "build", "license.txt"))
   },
   packed: async context => {
     await expectUpdateMetadata(context, archFromString(process.arch))
-    const updateInfo = safeLoad(await readFile(path.join(context.outDir, "latest.yml"), "utf-8"))
-    expect(updateInfo.sha512).not.toEqual("")
-    expect(updateInfo.releaseDate).not.toEqual("")
-    delete updateInfo.sha2
-    delete updateInfo.sha512
-    delete updateInfo.releaseDate
-    expect(updateInfo).toMatchSnapshot()
     await checkHelpers(context.getResources(Platform.WINDOWS), true)
     await doTest(context.outDir, false)
   }

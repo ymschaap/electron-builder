@@ -1,128 +1,112 @@
-import { CancellationToken, DownloadOptions, AllPublishOptions, UpdateInfo, AppImageUpdateInfo } from "builder-util-runtime"
-import { spawn, SpawnOptions } from "child_process"
-import "source-map-support/register"
-import { DifferentialDownloader } from "./differentialPackage"
-import { FileInfo, UPDATE_DOWNLOADED, UpdateCheckResult } from "./main"
-import { BaseUpdater } from "./BaseUpdater"
-import { readBlockMapDataFromAppImage } from "builder-util-runtime/out/blockMapApi"
-import { safeLoad } from "js-yaml"
-import { chmod, move } from "fs-extra-p"
+import { AllPublishOptions, newError } from "builder-util-runtime"
+import { execFileSync, spawn } from "child_process"
+import { chmod } from "fs-extra"
+import { unlinkSync } from "fs"
 import * as path from "path"
-import isDev from "electron-is-dev"
-import BluebirdPromise from "bluebird-lst"
+import { DownloadUpdateOptions } from "./AppUpdater"
+import { BaseUpdater, InstallOptions } from "./BaseUpdater"
+import { FileWithEmbeddedBlockMapDifferentialDownloader } from "./differentialDownloader/FileWithEmbeddedBlockMapDifferentialDownloader"
+import { findFile } from "./providers/Provider"
 
 export class AppImageUpdater extends BaseUpdater {
   constructor(options?: AllPublishOptions | null, app?: any) {
     super(options, app)
   }
 
-  checkForUpdatesAndNotify(): Promise<UpdateCheckResult | null> {
-    if (isDev) {
-      return BluebirdPromise.resolve(null)
-    }
-
+  public isUpdaterActive(): boolean {
     if (process.env.APPIMAGE == null) {
-      this._logger.warn("APPIMAGE env is not defined, current application is not an AppImage")
-      return BluebirdPromise.resolve(null)
+      if (process.env.SNAP == null) {
+        this._logger.warn("APPIMAGE env is not defined, current application is not an AppImage")
+      }
+      else {
+        this._logger.info("SNAP env is defined, updater is disabled")
+      }
+      return false
     }
-
-    return super.checkForUpdatesAndNotify()
+    return super.isUpdaterActive()
   }
 
   /*** @private */
-  protected async doDownloadUpdate(versionInfo: UpdateInfo, fileInfo: FileInfo, cancellationToken: CancellationToken): Promise<Array<string>> {
-    const downloadOptions: DownloadOptions = {
-      skipDirCreation: true,
-      headers: this.computeRequestHeaders(fileInfo),
-      cancellationToken,
-      sha512: fileInfo == null ? null : fileInfo.sha512,
-    }
+  protected doDownloadUpdate(downloadUpdateOptions: DownloadUpdateOptions): Promise<Array<string>> {
+    const provider = downloadUpdateOptions.updateInfoAndProvider.provider
+    const fileInfo = findFile(provider.resolveFiles(downloadUpdateOptions.updateInfoAndProvider.info), "AppImage")!!
+    return this.executeDownload({
+      fileExtension: "AppImage",
+      fileInfo,
+      downloadUpdateOptions,
+      task: async (updateFile, downloadOptions) => {
+        const oldFile = process.env.APPIMAGE!!
+        if (oldFile == null) {
+          throw newError("APPIMAGE env is not defined", "ERR_UPDATER_OLD_FILE_NOT_FOUND")
+        }
 
-    let installerPath = this.downloadedUpdateHelper.getDownloadedFile(versionInfo, fileInfo)
-    if (installerPath != null) {
-      return [installerPath]
-    }
+        let isDownloadFull = false
+        try {
+          await new FileWithEmbeddedBlockMapDifferentialDownloader(fileInfo.info, this.httpExecutor, {
+            newUrl: fileInfo.url,
+            oldFile,
+            logger: this._logger,
+            newFile: updateFile,
+            isUseMultipleRangeRequest: provider.isUseMultipleRangeRequest,
+            requestHeaders: downloadUpdateOptions.requestHeaders,
+          })
+            .download()
+        }
+        catch (e) {
+          this._logger.error(`Cannot download differentially, fallback to full download: ${e.stack || e}`)
+          // during test (developer machine mac) we must throw error
+          isDownloadFull = process.platform === "linux"
+        }
 
-    await this.executeDownload(downloadOptions, fileInfo, async (tempDir, destinationFile) => {
-      installerPath = destinationFile
+        if (isDownloadFull) {
+          await this.httpExecutor.download(fileInfo.url, updateFile, downloadOptions)
+        }
 
-      const oldFile = process.env.APPIMAGE!!
-      if (oldFile == null) {
-        throw new Error("APPIMAGE env is not defined")
-      }
-
-      let isDownloadFull = false
-      try {
-        await new DifferentialDownloader((versionInfo as any) as AppImageUpdateInfo, this.httpExecutor, {
-          newUrl: fileInfo.url,
-          oldPackageFile: oldFile,
-          logger: this._logger,
-          newFile: installerPath,
-          requestHeaders: this.requestHeaders,
-        }).downloadAppImage(safeLoad(await readBlockMapDataFromAppImage(oldFile)))
-      }
-      catch (e) {
-        this._logger.error(`Cannot download differentially, fallback to full download: ${e.stack || e}`)
-        // during test (developer machine mac) we must throw error
-        isDownloadFull = process.platform === "linux"
-      }
-
-      if (isDownloadFull) {
-        await this.httpExecutor.download(fileInfo.url, installerPath, downloadOptions)
-      }
+        await chmod(updateFile, 0o755)
+      },
     })
-
-    this.downloadedUpdateHelper.setDownloadedFile(installerPath!!, null, versionInfo, fileInfo)
-    this.addQuitHandler()
-    this.emit(UPDATE_DOWNLOADED, this.versionInfo)
-    return [installerPath!!]
   }
 
-  protected doInstall(installerPath: string, isSilent: boolean, isForceRunAfter: boolean): boolean {
-    const args = [""]
-    if (isForceRunAfter) {
-      args.push("--force-run")
-    }
-
+  protected doInstall(options: InstallOptions): boolean {
     const appImageFile = process.env.APPIMAGE!!
     if (appImageFile == null) {
-      throw new Error("APPIMAGE env is not defined")
+      throw newError("APPIMAGE env is not defined", "ERR_UPDATER_OLD_FILE_NOT_FOUND")
     }
 
-    const spawnOptions: SpawnOptions = {
-      detached: true,
-      stdio: "ignore",
-      env: {
-        APPIMAGE_SILENT_INSTALL: "true",
-      },
-    }
-
-    if (!isForceRunAfter) {
-      spawnOptions.env.APPIMAGE_EXIT_AFTER_INSTALL = "true"
-    }
+    // https://stackoverflow.com/a/1712051/1910191
+    unlinkSync(appImageFile)
 
     let destination: string
-    if (path.basename(installerPath) === path.basename(appImageFile)) {
+    const existingBaseName = path.basename(appImageFile)
+    // https://github.com/electron-userland/electron-builder/issues/2964
+    // if no version in existing file name, it means that user wants to preserve current custom name
+    if (path.basename(options.installerPath) === existingBaseName || !/\d+\.\d+\.\d+/.test(existingBaseName)) {
       // no version in the file name, overwrite existing
       destination = appImageFile
     }
     else {
-      destination = path.join(path.dirname(appImageFile), path.basename(installerPath))
-      spawnOptions.env.APPIMAGE_DELETE_OLD_FILE = appImageFile
+      destination = path.join(path.dirname(appImageFile), path.basename(options.installerPath))
     }
-    move(installerPath, destination, {overwrite: true})
-      .then(() => chmod(destination, "0755"))
-      .then(() => {
-        try {
-          spawn(installerPath, args, spawnOptions)
-            .unref()
-        }
-        catch (e) {
-          this.dispatchError(e)
-        }
-      })
-      .catch(e => this.dispatchError(e))
 
+    execFileSync("mv", ["-f", options.installerPath, destination])
+
+    const env: any = {
+      ...process.env,
+      APPIMAGE_SILENT_INSTALL: "true",
+    }
+
+    if (options.isForceRunAfter) {
+      spawn(destination, [], {
+        detached: true,
+        stdio: "ignore",
+        env,
+      })
+        .unref()
+    }
+    else {
+      env.APPIMAGE_EXIT_AFTER_INSTALL = "true"
+      execFileSync(destination, [], {env})
+    }
     return true
   }
 }

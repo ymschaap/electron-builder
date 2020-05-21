@@ -3,10 +3,9 @@ You decided to contribute to this project? Great, thanks a lot for pushing it.
 This project adheres to the [Contributor Covenant](http://contributor-covenant.org) code of conduct. By participating, you are expected to uphold this code. Please file issue to report unacceptable behavior.
 
 ## Pull Requests
-To check that your contributions match the project coding style make sure `npm test` passes.
+To check that your contributions match the project coding style make sure `yarn test` passes.
 
-1. [yarn](https://yarnpkg.com) is required because NPM is not reliable.
-2. [git-lfs](https://git-lfs.github.com) is required (use `git lfs pull` to download files when git-lfs was installed after git clone).
+[yarn](https://yarnpkg.com) is required because NPM is not reliable.
 
 To build project: `yarn && yarn compile`
 
@@ -17,15 +16,25 @@ We use [semantic-release](https://github.com/semantic-release/semantic-release),
 
 ## Documentation
 
+To avoid google indexing, documentation files located in the branch `docs`. To clone:
+
+```shell script
+git clone --single-branch -b docs git@github.com:electron-userland/electron-builder.git docs
+```
+
 Documentation files located in the `/docs`.
 
 `/docs` is deployed to Netlify when `next` release is marked as `latest` and available for all users.
 
+`pip3 install mkdocs-material mkdocs markdown-include pymdown-extensions pygments --upgrade`
+
+You'll want to copy the `mkdocs.yml` file from the master branch and then: `mkdocs build`
+
 ## Debug Tests
 
-Only IntelliJ Platform IDEs ([IntelliJ IDEA](https://confluence.jetbrains.com/display/IDEADEV/IDEA+2017.1+EAP), [WebStorm](https://confluence.jetbrains.com/display/WI/WebStorm+EAP)) support debug. Please prefer to use 2017.2.
+Only IntelliJ Platform IDEs ([IntelliJ IDEA](https://confluence.jetbrains.com/display/IDEADEV/IDEA+2017.1+EAP), [WebStorm](https://confluence.jetbrains.com/display/WI/WebStorm+EAP)) support debug.
 
-If you use IntelliJ IDEA or WebStorm 2017.2 — [ij-rc-producer](https://github.com/develar/ij-rc-producer) is used and you can run tests from an editor (just click on `Run` green gutter icon).
+If you use IntelliJ IDEA or WebStorm — [ij-rc-producer](https://github.com/develar/ij-rc-producer) is used and you can run tests from an editor (just click on `Run` green gutter icon).
 
 Or you can create Node.js run configuration manually:
 * Ensure that `Before launch` contains `Compile TypeScript`.
@@ -36,7 +45,7 @@ Or you can create Node.js run configuration manually:
   ```
 * Set `Environment Variables`:
   * Optionally, `TEST_APP_TMP_DIR` to some directory (e.g. `/tmp/electron-builder-test`) to inspect output if test uses temporary directory (only if `--match` is used). Specified directory will be used instead of random temporary directory and *cleared* on each run.
-  
+
 ### Run Test using CLI
 ```sh
 TEST_APP_TMP_DIR=/tmp/electron-builder-test ./node_modules/.bin/jest --env jest-environment-node-debug -t 'assisted' '/oneClickInstallerTest\.\w+$'

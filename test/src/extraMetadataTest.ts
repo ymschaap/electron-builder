@@ -1,7 +1,7 @@
 import { DIR_TARGET, Platform } from "electron-builder"
-import { readAsarJson } from "electron-builder/out/asar/asar"
+import { readAsarJson } from "app-builder-lib/out/asar/asar"
 import { coerceTypes } from "electron-builder/out/builder"
-import { readJson } from "fs-extra-p"
+import { readJson } from "fs-extra"
 import * as path from "path"
 import { assertThat } from "./helpers/fileAssert"
 import { app, modifyPackageJson } from "./helpers/packTester"
@@ -71,6 +71,6 @@ test("cli", async () => {
     return result
   }
 
-  expect(parseExtraMetadata("--em.foo=bar")).toMatchSnapshot()
-  expect(parseExtraMetadata("--em.dev.login-url")).toMatchSnapshot()
+  expect(parseExtraMetadata("--c.extraMetadata.foo=bar")).toMatchSnapshot()
+  expect(parseExtraMetadata("--c.extraMetadata.dev.login-url")).toMatchSnapshot()
 })

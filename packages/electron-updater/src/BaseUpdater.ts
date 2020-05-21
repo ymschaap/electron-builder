@@ -1,89 +1,101 @@
-import { DownloadedUpdateHelper } from "./DownloadedUpdateHelper"
-import { AppUpdater } from "./AppUpdater"
-import { AllPublishOptions, CancellationError, DownloadOptions } from "builder-util-runtime"
-import { mkdtemp, remove } from "fs-extra-p"
-import * as path from "path"
-import { tmpdir } from "os"
-import { DOWNLOAD_PROGRESS, FileInfo } from "./main"
+import { AllPublishOptions } from "builder-util-runtime"
+import { AppAdapter } from "./AppAdapter"
+import { AppUpdater, DownloadExecutorTask } from "./AppUpdater"
 
 export abstract class BaseUpdater extends AppUpdater {
-  protected readonly downloadedUpdateHelper = new DownloadedUpdateHelper()
-
   protected quitAndInstallCalled = false
   private quitHandlerAdded = false
 
-  constructor(options?: AllPublishOptions | null, app?: any) {
+  protected constructor(options?: AllPublishOptions | null, app?: AppAdapter) {
     super(options, app)
   }
 
-  quitAndInstall(isSilent: boolean = false, isForceRunAfter: boolean = false): void {
-    if (this.install(isSilent, isForceRunAfter)) {
-      this.app.quit()
+  quitAndInstall(isSilent = false, isForceRunAfter = false): void {
+    this._logger.info(`Install on explicit quitAndInstall`)
+    const isInstalled = this.install(isSilent, isSilent ? isForceRunAfter : true)
+    if (isInstalled) {
+      setImmediate(() => {
+        this.app.quit()
+      })
+    }
+    else {
+      this.quitAndInstallCalled = false
     }
   }
 
-  protected async executeDownload(downloadOptions: DownloadOptions, fileInfo: FileInfo, task: (tempDir: string, destinationFile: string, removeTempDirIfAny: () => Promise<any>) => Promise<any>) {
-    if (this.listenerCount(DOWNLOAD_PROGRESS) > 0) {
-      downloadOptions.onProgress = it => this.emit(DOWNLOAD_PROGRESS, it)
-    }
-
-    // use TEST_APP_TMP_DIR if defined and developer machine (must be not windows due to security reasons - we must not use env var in the production)
-    const tempDir = await mkdtemp(`${path.join((process.platform === "darwin" ? process.env.TEST_APP_TMP_DIR : null) || tmpdir(), "up")}-`)
-
-    const removeTempDirIfAny = () => {
-      this.downloadedUpdateHelper.clear()
-      return remove(tempDir)
-        .catch(() => {
-          // ignored
-        })
-    }
-
-    try {
-      const destinationFile = path.join(tempDir, fileInfo.name)
-      await task(tempDir, destinationFile, removeTempDirIfAny)
-
-      this._logger.info(`New version ${this.versionInfo!.version} has been downloaded to ${destinationFile}`)
-    }
-    catch (e) {
-      await removeTempDirIfAny()
-
-      if (e instanceof CancellationError) {
-        this.emit("update-cancelled", this.versionInfo)
-        this._logger.info("Cancelled")
+  protected executeDownload(taskOptions: DownloadExecutorTask): Promise<Array<string>> {
+    return super.executeDownload({
+      ...taskOptions,
+      done: async event => {
+        this.dispatchUpdateDownloaded(event)
+        this.addQuitHandler()
       }
-      throw e
-    }
+    })
   }
 
-  protected abstract doInstall(installerPath: string, isSilent: boolean, isForceRunAfter: boolean): boolean
+  // must be sync
+  protected abstract doInstall(options: InstallOptions): boolean
 
+  // must be sync (because quit even handler is not async)
   protected install(isSilent: boolean, isForceRunAfter: boolean): boolean {
     if (this.quitAndInstallCalled) {
+      this._logger.warn("install call ignored: quitAndInstallCalled is set to true")
       return false
     }
 
-    const installerPath = this.downloadedUpdateHelper.file
-    if (!this.updateAvailable || installerPath == null) {
-      this.dispatchError(new Error("No update available, can't quit and install"))
+    const downloadedUpdateHelper = this.downloadedUpdateHelper
+    const installerPath = downloadedUpdateHelper == null ? null : downloadedUpdateHelper.file
+    const downloadedFileInfo = downloadedUpdateHelper == null ? null : downloadedUpdateHelper.downloadedFileInfo
+    if (installerPath == null || downloadedFileInfo == null) {
+      this.dispatchError(new Error("No valid update available, can't quit and install"))
       return false
     }
 
     // prevent calling several times
     this.quitAndInstallCalled = true
 
-    return this.doInstall(installerPath, isSilent, isForceRunAfter)
+    try {
+      this._logger.info(`Install: isSilent: ${isSilent}, isForceRunAfter: ${isForceRunAfter}`)
+      return this.doInstall({
+        installerPath,
+        isSilent,
+        isForceRunAfter,
+        isAdminRightsRequired: downloadedFileInfo.isAdminRightsRequired,
+      })
+    }
+    catch (e) {
+      this.dispatchError(e)
+      return false
+    }
   }
 
-  protected addQuitHandler() {
-    if (this.quitHandlerAdded) {
+  protected addQuitHandler(): void {
+    if (this.quitHandlerAdded || !this.autoInstallOnAppQuit) {
       return
     }
 
     this.quitHandlerAdded = true
 
-    this.app.on("quit", () => {
+    this.app.onQuit(exitCode => {
+      if (this.quitAndInstallCalled) {
+        this._logger.info("Update installer has already been triggered. Quitting application.")
+        return
+      }
+
+      if (exitCode !== 0) {
+        this._logger.info(`Update will be not installed on quit because application is quitting with exit code ${exitCode}`)
+        return
+      }
+
       this._logger.info("Auto install update on quit")
       this.install(true, false)
     })
   }
+}
+
+export interface InstallOptions {
+  readonly installerPath: string
+  readonly isSilent: boolean
+  readonly isForceRunAfter: boolean
+  readonly isAdminRightsRequired: boolean
 }

@@ -1,8 +1,8 @@
-import BluebirdPromise from "bluebird-lst"
 import { walk } from "builder-util/out/fs"
 import { Arch, Platform } from "electron-builder"
-import { readAsarJson } from "electron-builder/out/asar/asar"
-import { outputFile, readFile } from "fs-extra-p"
+import { readAsarJson } from "app-builder-lib/out/asar/asar"
+import { outputFile } from "fs-extra"
+import { promises as fs } from "fs"
 import { safeLoad } from "js-yaml"
 import * as path from "path"
 import { assertThat } from "./fileAssert"
@@ -10,7 +10,7 @@ import { PackedContext } from "./packTester"
 import { diff, WineManager } from "./wine"
 
 export async function expectUpdateMetadata(context: PackedContext, arch: Arch = Arch.ia32, requireCodeSign: boolean = false): Promise<void> {
-  const data = safeLoad(await readFile(path.join(context.getResources(Platform.WINDOWS, arch), "app-update.yml"), "utf-8"))
+  const data = safeLoad(await fs.readFile(path.join(context.getResources(Platform.WINDOWS, arch), "app-update.yml"), "utf-8")) as any
   if (requireCodeSign) {
     expect(data.publisherName).toEqual(["Foo, Inc"])
     delete data.publisherName
@@ -19,9 +19,9 @@ export async function expectUpdateMetadata(context: PackedContext, arch: Arch = 
   expect(data).toMatchSnapshot()
 }
 
-export async function checkHelpers(resourceDir: string, packElevateHelper: boolean) {
+export async function checkHelpers(resourceDir: string, isPackElevateHelper: boolean) {
   const elevateHelperExecutable = path.join(resourceDir, "elevate.exe")
-  if (packElevateHelper) {
+  if (isPackElevateHelper) {
     await assertThat(elevateHelperExecutable).isFile()
   }
   else {
@@ -31,14 +31,14 @@ export async function checkHelpers(resourceDir: string, packElevateHelper: boole
 
 export async function doTest(outDir: string, perUser: boolean, productFilename = "TestApp Setup", name = "TestApp", menuCategory: string | null = null, packElevateHelper = true) {
   if (process.env.DO_WINE !== "true") {
-    return BluebirdPromise.resolve()
+    return Promise.resolve()
   }
 
   const wine = new WineManager()
   await wine.prepare()
-  const driveC = path.join(wine.wineDir, "drive_c")
-  const driveCWindows = path.join(wine.wineDir, "drive_c", "windows")
-  const perUserTempDir = path.join(wine.userDir, "Temp")
+  const driveC = path.join(wine.wineDir!!, "drive_c")
+  const driveCWindows = path.join(wine.wineDir!!, "drive_c", "windows")
+  const perUserTempDir = path.join(wine.userDir!!, "Temp")
   const walkFilter = (it: string) => {
     return it !== driveCWindows && it !== perUserTempDir
   }
@@ -51,7 +51,7 @@ export async function doTest(outDir: string, perUser: boolean, productFilename =
 
   await wine.exec(path.join(outDir, `${productFilename} Setup 1.1.0.exe`), "/S")
 
-  let instDir = perUser ? path.join(wine.userDir, "Local Settings", "Application Data", "Programs") : path.join(driveC, "Program Files")
+  let instDir = perUser ? path.join(wine.userDir!!, "Local Settings", "Application Data", "Programs") : path.join(driveC, "Program Files")
   if (menuCategory != null) {
     instDir = path.join(instDir, menuCategory)
   }
@@ -83,7 +83,7 @@ export async function doTest(outDir: string, perUser: boolean, productFilename =
   expect(fsChanges.deleted).toEqual([])
 
   // run installer again to test uninstall
-  const appDataFile = path.join(wine.userDir, "Application Data", name, "doNotDeleteMe")
+  const appDataFile = path.join(wine.userDir!!, "Application Data", name, "doNotDeleteMe")
   await outputFile(appDataFile, "app data must be not removed")
   fsBefore = await listFiles()
   await wine.exec(path.join(outDir, `${productFilename} Setup 1.1.0.exe`), "/S")

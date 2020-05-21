@@ -1,11 +1,13 @@
 import { exists, statOrNull } from "builder-util/out/fs"
-import { lstat } from "fs-extra-p"
+import { promises as fs } from "fs"
 import * as path from "path"
 
 // http://joel-costigliola.github.io/assertj/
 export function assertThat(actual: any): Assertions {
   return new Assertions(actual)
 }
+
+const appVersion = require(path.join(__dirname, "../../../packages/app-builder-lib/package.json")).version
 
 class Assertions {
   constructor(private actual: any) {
@@ -32,7 +34,7 @@ class Assertions {
   }
 
   async isSymbolicLink() {
-    const info = await lstat(this.actual)
+    const info = await fs.lstat(this.actual)
     if (!info.isSymbolicLink()) {
       throw new Error(`Path ${this.actual} is not a symlink`)
     }
@@ -55,7 +57,7 @@ class Assertions {
     }
   }
 
-  async throws() {
+  async throws(customErrorAssert?: (error: Error) => void) {
     let actualError: Error | null = null
     let result: any
     try {
@@ -70,7 +72,7 @@ class Assertions {
       m = result
     }
     else {
-      m = actualError.message
+      m = (actualError as NodeJS.ErrnoException).code || actualError.message
 
       if (m.includes("HttpError: ") && m.indexOf("\n") > 0) {
         m = m.substring(0, m.indexOf("\n"))
@@ -80,12 +82,18 @@ class Assertions {
         m = m.substring(0, m.indexOf(","))
       }
 
-      m = m.replace(/\((C:)?(\/|\\)[^(]+(\/|\\)([^(\/\\]+)\)/g, `(<path>/$4)`)
-      m = m.replace(/"(C:)?(\/|\\)[^"]+(\/|\\)([^"\/\\]+)"/g, `"<path>/$4"`)
-      m = m.replace(/'(C:)?(\/|\\)[^']+(\/|\\)([^'\/\\]+)'/g, `'<path>/$4'`)
+      m = m.replace(appVersion, "<appVersion>")
+      m = m.replace(/\((C:)?([\/\\])[^(]+([\/\\])([^(\/\\]+)\)/g, `(<path>/$4)`)
+      m = m.replace(/"(C:)?([\/\\])[^"]+([\/\\])([^"\/\\]+)"/g, `"<path>/$4"`)
+      m = m.replace(/'(C:)?([\/\\])[^']+([\/\\])([^'\/\\]+)'/g, `'<path>/$4'`)
     }
     try {
-      expect(m).toMatchSnapshot()
+      if (customErrorAssert == null) {
+        expect(m).toMatchSnapshot()
+      }
+      else {
+        customErrorAssert(actualError!!)
+      }
     }
     catch (matchError) {
       throw new Error(matchError + " " + actualError)

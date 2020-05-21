@@ -1,16 +1,14 @@
-import BluebirdPromise from "bluebird-lst"
 import { Arch, Platform } from "electron-builder"
-import { readFile, writeFile } from "fs-extra-p"
-import { safeLoad } from "js-yaml"
+import { copyFile, writeFile } from "fs-extra"
 import * as path from "path"
 import { assertThat } from "../helpers/fileAssert"
-import { app, appThrows, assertPack, copyTestAsset, modifyPackageJson } from "../helpers/packTester"
+import { app, assertPack, copyTestAsset, modifyPackageJson } from "../helpers/packTester"
 import { checkHelpers, doTest, expectUpdateMetadata } from "../helpers/winHelper"
 
 const nsisTarget = Platform.WINDOWS.createTarget(["nsis"])
 
 test("one-click", app({
-  targets: Platform.WINDOWS.createTarget(["nsis"], Arch.ia32),
+  targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64),
   config: {
     publish: {
       provider: "bintray",
@@ -25,24 +23,23 @@ test("one-click", app({
 }, {
   signedWin: true,
   packed: async context => {
-    await checkHelpers(context.getResources(Platform.WINDOWS, Arch.ia32), false)
+    await checkHelpers(context.getResources(Platform.WINDOWS, Arch.x64), false)
     await doTest(context.outDir, true, "TestApp Setup", "TestApp", null, false)
-    await expectUpdateMetadata(context, Arch.ia32, true)
+    await expectUpdateMetadata(context, Arch.x64, true)
   }
 }))
 
-// test.ifAll("one-click - differential package", app({
-//   targets: Platform.WINDOWS.createTarget(["nsis"], Arch.x64),
-//   config: {
-//     publish: null,
-//     nsis: {
-//       differentialPackage: true,
-//     },
-//   }
-// }, {
-//   // test that 7za is signed
-//   signedWin: true,
-// }))
+test.ifAll("custom guid", app({
+  targets: Platform.WINDOWS.createTarget(["nsis"], Arch.ia32),
+  config: {
+    appId: "boo",
+    productName: "boo Hub",
+    publish: null,
+    nsis: {
+      guid: "Foo Technologies\\Bar"
+    },
+  }
+}))
 
 test.ifAll.ifNotCiMac("multi language license", app({
   targets: Platform.WINDOWS.createTarget("nsis"),
@@ -51,11 +48,11 @@ test.ifAll.ifNotCiMac("multi language license", app({
     nsis: {
       uninstallDisplayName: "Hi!!!",
       createDesktopShortcut: false,
-    }
+    },
   },
 }, {
   projectDirCreated: projectDir => {
-    return BluebirdPromise.all([
+    return Promise.all([
       writeFile(path.join(projectDir, "build", "license_en.txt"), "Hi"),
       writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет"),
       writeFile(path.join(projectDir, "build", "license_ko.txt"), "Привет"),
@@ -75,9 +72,19 @@ test.ifAll.ifNotCiMac("html license", app({
   },
 }, {
   projectDirCreated: projectDir => {
-    return BluebirdPromise.all([
+    return Promise.all([
       writeFile(path.join(projectDir, "build", "license.html"), '<html><body><p>Hi <a href="https://google.com" target="_blank">google</a></p></body></html>'),
     ])
+  },
+}))
+
+test.ifAll.ifDevOrWinCi("createDesktopShortcut always", app({
+  targets: Platform.WINDOWS.createTarget("nsis"),
+  config: {
+    publish: null,
+    nsis: {
+      createDesktopShortcut: "always",
+    }
   },
 }))
 
@@ -101,23 +108,19 @@ test.ifDevOrLinuxCi("perMachine, no run after finish", app({
       // tslint:disable:no-invalid-template-strings
       url: "https://develar.s3.amazonaws.com/test/${os}/${arch}",
     },
+    win: {
+      electronUpdaterCompatibility: ">=2.16",
+    },
   },
 }, {
   projectDirCreated: projectDir => {
-    return BluebirdPromise.all([
+    return Promise.all([
       copyTestAsset("headerIcon.ico", path.join(projectDir, "build", "foo test space.ico")),
       copyTestAsset("license.txt", path.join(projectDir, "build", "license.txt")),
     ])
   },
   packed: async context => {
     await expectUpdateMetadata(context)
-    const updateInfo = safeLoad(await readFile(path.join(context.outDir, "latest.yml"), "utf-8"))
-    expect(updateInfo.sha512).not.toEqual("")
-    expect(updateInfo.releaseDate).not.toEqual("")
-    delete updateInfo.sha2
-    delete updateInfo.sha512
-    delete updateInfo.releaseDate
-    expect(updateInfo).toMatchSnapshot()
     await checkHelpers(context.getResources(Platform.WINDOWS, Arch.ia32), true)
     await doTest(context.outDir, false)
   },
@@ -135,19 +138,34 @@ test.ifNotCiMac("installerHeaderIcon", () => {
     }, {
       projectDirCreated: projectDir => {
         headerIconPath = path.join(projectDir, "build", "installerHeaderIcon.ico")
-        return BluebirdPromise.all([copyTestAsset("headerIcon.ico", headerIconPath), copyTestAsset("headerIcon.ico", path.join(projectDir, "build", "uninstallerIcon.ico"))])
+        return Promise.all([copyTestAsset("headerIcon.ico", headerIconPath), copyTestAsset("headerIcon.ico", path.join(projectDir, "build", "uninstallerIcon.ico"))])
       }
     }
   )
 })
 
-test.ifDevOrLinuxCi("custom include", () => assertPack("test-app-one", {targets: nsisTarget}, {
+test.ifDevOrLinuxCi("custom include", app({targets: nsisTarget}, {
   projectDirCreated: projectDir => copyTestAsset("installer.nsh", path.join(projectDir, "build", "installer.nsh")),
-  packed: context => BluebirdPromise.all([
+  packed: context => Promise.all([
     assertThat(path.join(context.projectDir, "build", "customHeader")).isFile(),
     assertThat(path.join(context.projectDir, "build", "customInit")).isFile(),
     assertThat(path.join(context.projectDir, "build", "customInstall")).isFile(),
   ]),
+}))
+
+test.skip("big file pack", app(
+  {
+    targets: nsisTarget,
+    config: {
+      extraResources: ["**/*.mov"],
+      nsis: {
+        differentialPackage: false,
+      },
+    },
+  }, {
+  projectDirCreated: async projectDir => {
+    await copyFile("/Volumes/Pegasus/15.02.18.m4v", path.join(projectDir, "foo/bar/video.mov"))
+  },
 }))
 
 test.ifDevOrLinuxCi("custom script", app({targets: nsisTarget}, {
@@ -178,16 +196,17 @@ test.ifAll.ifNotCiMac("menuCategory", app({
   }
 }))
 
-test.ifAll.ifNotCiMac("string menuCategory", app({
+test.ifNotCiMac("string menuCategory", app({
   targets: Platform.WINDOWS.createTarget(["nsis"], Arch.ia32),
   config: {
     extraMetadata: {
       name: "test-menu-category",
-      productName: "Test Menu Category"
+      productName: "Test Menu Category '"
     },
     publish: null,
     nsis: {
       oneClick: false,
+      runAfterFinish: false,
       menuCategory: "Foo/Bar",
       // tslint:disable-next-line:no-invalid-template-strings
       artifactName: "${productName} CustomName ${version}.${ext}"
@@ -202,9 +221,10 @@ test.ifAll.ifNotCiMac("string menuCategory", app({
   }
 }))
 
-test.ifDevOrLinuxCi("file associations only perMachine", appThrows({
+test.ifDevOrLinuxCi("file associations per user", app({
   targets: Platform.WINDOWS.createTarget(["nsis"], Arch.ia32),
   config: {
+    publish: null,
     fileAssociations: [
       {
         ext: "foo",

@@ -1,18 +1,29 @@
-import BluebirdPromise from "bluebird-lst"
+import { exec } from "builder-util"
 import { copyFile } from "builder-util/out/fs"
 import { attachAndExecute, getDmgTemplatePath } from "dmg-builder/out/dmgUtil"
 import { Platform } from "electron-builder"
-import { PlatformPackager } from "electron-builder/out/platformPackager"
-import { remove, writeFile } from "fs-extra-p"
+import { PlatformPackager } from "app-builder-lib"
 import * as path from "path"
+import { promises as fs } from "fs"
 import { assertThat } from "../helpers/fileAssert"
 import { app, assertPack, copyTestAsset } from "../helpers/packTester"
 
+const dmgTarget = Platform.MAC.createTarget("dmg")
+
+test.ifMac("dmg", app({
+  targets: dmgTarget,
+  config: {
+    productName: "DefaultDmg",
+    publish: null,
+  },
+}))
+
 test.ifMac("no build directory", app({
-  targets: Platform.MAC.createTarget("dmg"),
+  targets: dmgTarget,
   config: {
     // dmg can mount only one volume name, so, to test in parallel, we set different product name
     productName: "NoBuildDirectory",
+    publish: null,
   },
   effectiveOptionComputed: async it => {
     if (!("volumePath" in it)) {
@@ -26,10 +37,32 @@ test.ifMac("no build directory", app({
     return false
   },
 }, {
-  projectDirCreated: projectDir => remove(path.join(projectDir, "build")),
+  projectDirCreated: projectDir => fs.rmdir(path.join(projectDir, "build"), {recursive: true}),
 }))
 
-test.ifAll.ifMac("custom background - new way", () => {
+test.ifMac("background color", app({
+  targets: dmgTarget,
+  config: {
+    // dmg can mount only one volume name, so, to test in parallel, we set different product name
+    productName: "BackgroundColor",
+    publish: null,
+    dmg: {
+      backgroundColor: "orange",
+      // speed-up test
+      writeUpdateInfo: false,
+    },
+  },
+  effectiveOptionComputed: async it => {
+    if (!("volumePath" in it)) {
+      return false
+    }
+    delete it.specification.icon
+    expect(it.specification).toMatchSnapshot()
+    return false
+  },
+}))
+
+test.ifMac("custom background - new way", () => {
   const customBackground = "customBackground.png"
   return assertPack("test-app-one", {
     targets: Platform.MAC.createTarget(),
@@ -41,17 +74,19 @@ test.ifAll.ifMac("custom background - new way", () => {
       dmg: {
         background: customBackground,
         icon: "foo.icns",
+        // speed-up test
+        writeUpdateInfo: false,
       },
     },
     effectiveOptionComputed: async it => {
-      expect(it.specification.background).toEqual(customBackground)
+      expect(it.specification.background).toMatch(new RegExp(`.+${customBackground}$`))
       expect(it.specification.icon).toEqual("foo.icns")
       const packager: PlatformPackager<any> = it.packager
       expect(await packager.getIconPath()).toEqual(path.join(packager.projectDir, "build", "customIcon.icns"))
       return true
     },
   }, {
-    projectDirCreated: projectDir => BluebirdPromise.all([
+    projectDirCreated: projectDir => Promise.all([
       copyFile(path.join(getDmgTemplatePath(), "background.tiff"), path.join(projectDir, customBackground)),
       // copy, but not rename to test that default icon is not used
       copyFile(path.join(projectDir, "build", "icon.icns"), path.join(projectDir, "build", "customIcon.icns")),
@@ -60,7 +95,38 @@ test.ifAll.ifMac("custom background - new way", () => {
   })
 })
 
-test.ifMac("no Applications link", () => {
+test.ifAll.ifMac("retina background as 2 png", () => {
+  return assertPack("test-app-one", {
+    targets: Platform.MAC.createTarget(),
+    config: {
+      publish: null,
+    },
+    effectiveOptionComputed: async it => {
+      expect(it.specification.background).toMatch(/\.tiff$/)
+      return true
+    },
+  }, {
+    projectDirCreated: async projectDir => {
+      const resourceDir = path.join(projectDir, "build")
+      await copyFile(path.join(getDmgTemplatePath(), "background.tiff"), path.join(resourceDir, "background.tiff"))
+
+      async function extractPng(index: number, suffix: string) {
+        await exec("tiffutil", ["-extract", index.toString(), path.join(getDmgTemplatePath(), "background.tiff")], {
+          cwd: projectDir
+        })
+        await exec("sips", ["-s", "format", "png", "out.tiff", "--out", `background${suffix}.png`], {
+          cwd: projectDir
+        })
+      }
+
+      await extractPng(0, "")
+      await extractPng(1, "@2x")
+      await fs.unlink(path.join(resourceDir, "background.tiff"))
+    },
+  })
+})
+
+test.ifMac.ifAll("no Applications link", () => {
   return assertPack("test-app-one", {
     targets: Platform.MAC.createTarget(),
     config: {
@@ -87,7 +153,7 @@ test.ifMac("no Applications link", () => {
       }
 
       const volumePath = it.volumePath
-      await BluebirdPromise.all([
+      await Promise.all([
         assertThat(path.join(volumePath, ".background", "background.tiff")).isFile(),
         assertThat(path.join(volumePath, "Applications")).doesNotExist(),
         assertThat(path.join(volumePath, "TextEdit.app")).isSymbolicLink(),
@@ -100,8 +166,9 @@ test.ifMac("no Applications link", () => {
 })
 
 test.ifMac("unset dmg icon", app({
-  targets: Platform.MAC.createTarget("dmg"),
+  targets: dmgTarget,
   config: {
+    publish: null,
     // dmg can mount only one volume name, so, to test in parallel, we set different product name
     productName: "Test ß No Volume Icon",
     dmg: {
@@ -111,7 +178,7 @@ test.ifMac("unset dmg icon", app({
 }, {
   packed: context => {
     return attachAndExecute(path.join(context.outDir, "Test ß No Volume Icon-1.1.0.dmg"), false, () => {
-      return BluebirdPromise.all([
+      return Promise.all([
         assertThat(path.join("/Volumes/Test ß No Volume Icon 1.1.0/.background/background.tiff")).isFile(),
         assertThat(path.join("/Volumes/Test ß No Volume Icon 1.1.0/.VolumeIcon.icns")).doesNotExist(),
       ])
@@ -121,8 +188,9 @@ test.ifMac("unset dmg icon", app({
 
 // test also "only dmg"
 test.ifMac("no background", app({
-  targets: Platform.MAC.createTarget("dmg"),
+  targets: dmgTarget,
   config: {
+    publish: null,
     // dmg can mount only one volume name, so, to test in parallel, we set different product name
     productName: "NoBackground",
     dmg: {
@@ -138,24 +206,18 @@ test.ifMac("no background", app({
   }
 }))
 
+// test also darkModeSupport
 test.ifAll.ifMac("bundleShortVersion", app({
-  targets: Platform.MAC.createTarget("dmg"),
+  targets: dmgTarget,
   config: {
+    publish: null,
     // dmg can mount only one volume name, so, to test in parallel, we set different product name
     productName: "BundleShortVersion",
     mac: {
       bundleShortVersion: "2017.1-alpha5",
+      darkModeSupport: true,
     },
   }
-}, {
-  checkMacApp: async (appDir, info) => {
-    expect(info).toMatchSnapshot()
-  },
-  // packed: async context => {
-    // return attachAndExecute(path.join(context.outDir, "NoBackground-2017.1-alpha5.dmg"), false, () => {
-    //   return assertThat(path.join("/Volumes/NoBackground 2017.1-alpha5/.background")).doesNotExist()
-    // })
-  // }
 }))
 
 test.ifAll.ifMac("disable dmg icon (light), bundleVersion", () => {
@@ -179,44 +241,43 @@ test.ifAll.ifMac("disable dmg icon (light), bundleVersion", () => {
   })
 })
 
-test.ifAll.ifMac("multi language license", app({
-  targets: Platform.MAC.createTarget("dmg"),
-}, {
+const packagerOptions = {
+  targets: dmgTarget,
+  config: {
+    publish: null,
+  }
+}
+
+test.ifAll.ifMac("multi language license", app(packagerOptions, {
   projectDirCreated: projectDir => {
-    return BluebirdPromise.all([
+    return Promise.all([
       // writeFile(path.join(projectDir, "build", "license_en.txt"), "Hi"),
-      writeFile(path.join(projectDir, "build", "license_de.txt"), "Hallo"),
-      writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет"),
+      fs.writeFile(path.join(projectDir, "build", "license_de.txt"), "Hallo"),
+      fs.writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет"),
     ])
   },
 }))
 
-test.ifAll.ifMac("license ru", app({
-  targets: Platform.MAC.createTarget("dmg"),
-}, {
+test.ifAll.ifMac("license ru", app(packagerOptions, {
   projectDirCreated: projectDir => {
-    return writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет".repeat(12))
+    return fs.writeFile(path.join(projectDir, "build", "license_ru.txt"), "Привет".repeat(12))
   },
 }))
 
-test.ifAll.ifMac("license en", app({
-  targets: Platform.MAC.createTarget("dmg"),
-}, {
+test.ifAll.ifMac("license en", app(packagerOptions, {
   projectDirCreated: projectDir => {
     return copyTestAsset("license_en.txt", path.join(projectDir, "build", "license_en.txt"))
   },
 }))
 
-test.ifAll.ifMac("license rtf", app({
-  targets: Platform.MAC.createTarget("dmg"),
-}, {
+test.ifAll.ifMac("license rtf", app(packagerOptions, {
   projectDirCreated: projectDir => {
     return copyTestAsset("license_de.rtf", path.join(projectDir, "build", "license_de.rtf"))
   },
 }))
 
 test.ifAll.ifMac("license buttons config", app({
-  targets: Platform.MAC.createTarget("dmg"),
+  ...packagerOptions,
   effectiveOptionComputed: async it => {
     if ("licenseData" in it) {
       expect(it.licenseData).toMatchSnapshot()
@@ -224,7 +285,7 @@ test.ifAll.ifMac("license buttons config", app({
     return false
   },
 }, {
-  projectDirCreated: projectDir => BluebirdPromise.all([
+  projectDirCreated: projectDir => Promise.all([
     copyTestAsset("license_en.txt", path.join(projectDir, "build", "license_en.txt")),
     copyTestAsset("license_fr.txt", path.join(projectDir, "build", "license_fr.txt")),
     copyTestAsset("license_ja.txt", path.join(projectDir, "build", "license_ja.txt")),

@@ -1,12 +1,11 @@
 "use strict"
 
-require('source-map-support').install()
-const isCi = require("is-ci")
+const isCi = require("ci-info").isCI
 
 const isWindows = process.platform === "win32"
 
 // Squirrel.Windows msi is very slow
-jasmine.DEFAULT_TIMEOUT_INTERVAL = (isWindows ? 30 : 10) * 1000 * 60
+jasmine.DEFAULT_TIMEOUT_INTERVAL = (isWindows ? 30 : 20) * 1000 * 60
 
 const skip = test.skip
 const skipSuite = describe.skip
@@ -21,6 +20,7 @@ const isMac = process.platform === "darwin"
 test.ifMac = isMac ? test : skip
 
 test.ifNotWindows = isWindows ? skip : test
+test.ifNotMac = isMac ? skip : test
 test.ifNotWindows.ifNotCiMac = isCi && isMac ? skip : test
 
 test.ifWindows = isWindows ? test : skip
@@ -30,7 +30,7 @@ skip.ifLinux = skip
 skip.ifWindows = skip
 
 skip.ifNotWindows = skip
-skip.ifNotWindows.ifNotCiMac = skip
+skip.ifNotMac = skip
 
 skip.ifCi = skip
 skip.ifNotCi = skip
@@ -71,4 +71,5 @@ if (!process.env.SZA_COMPRESSION_LEVEL) {
   process.env.SZA_COMPRESSION_LEVEL = "0"
 }
 
-process.env.FORCE_YARN = true
+process.env.FORCE_YARN = "true"
+process.env.TEST_SET_BABEL_PRESET = "true"
